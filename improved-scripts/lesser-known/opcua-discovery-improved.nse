@@ -3,7 +3,6 @@ local shortport = require "shortport"
 local stdnse = require "stdnse"
 local string = require "string"
 local table = require "table"
-local bin = require "bin"
 
 description = [[
 Detects OPC UA (Open Platform Communications Unified Architecture) servers on TCP
@@ -74,15 +73,16 @@ portrule = shortport.portnumber(4840, "tcp", {"open", "open|filtered"})
 --
 -- @return string containing the raw 32-byte HEL message
 local function build_hello_message()
-  local hel = bin.pack(">c3", "H", "E", "L")
-      .. bin.pack(">c1", string.char(0x00))
-      .. bin.pack("<I4", 32)            -- message length
-      .. bin.pack("<I4", 0)             -- protocol version
-      .. bin.pack("<I4", 65535)         -- receive buffer size
-      .. bin.pack("<I4", 65535)         -- send buffer size
-      .. bin.pack("<I4", 65536)         -- max message length
-      .. bin.pack("<I4", 0)             -- max chunk count
-      .. bin.pack("<I4", 0)             -- endpoint URL length (none)
+  -- "HEL" + reserved 0x00, then 7 little-endian uint32 fields (28 bytes),
+  -- for a total message length of 32 bytes.
+  local hel = "HEL\0"
+      .. string.pack("<I4", 32)         -- message length
+      .. string.pack("<I4", 0)          -- protocol version
+      .. string.pack("<I4", 65535)      -- receive buffer size
+      .. string.pack("<I4", 65535)      -- send buffer size
+      .. string.pack("<I4", 65536)      -- max message length
+      .. string.pack("<I4", 0)          -- max chunk count
+      .. string.pack("<I4", 0)          -- endpoint URL length (none)
   return hel
 end
 
@@ -111,18 +111,11 @@ local function parse_ack_response(data)
     return nil, string.format("Not an ACK response: got '%.3s' (0x%s)", ack_tag, stdnse.tohex(data:sub(1, 3)))
   end
 
-  local pos = 5  -- skip past "ACK\0" (4 bytes)
-  local _, message_length = bin.unpack("<I4", data, pos)
-  pos = pos + 4
-  local _, protocol_version = bin.unpack("<I4", data, pos)
-  pos = pos + 4
-  local _, recv_buffer_size = bin.unpack("<I4", data, pos)
-  pos = pos + 4
-  local _, send_buffer_size = bin.unpack("<I4", data, pos)
-  pos = pos + 4
-  local _, max_message_length = bin.unpack("<I4", data, pos)
-  pos = pos + 4
-  local _, max_chunk_count = bin.unpack("<I4", data, pos)
+  -- Six little-endian uint32 fields starting just past "ACK\0" (offset 5).
+  -- string.unpack returns the values followed by the next position.
+  local message_length, protocol_version, recv_buffer_size,
+        send_buffer_size, max_message_length, max_chunk_count =
+    string.unpack("<I4I4I4I4I4I4", data, 5)
 
   return {
     message_length    = message_length,
@@ -155,13 +148,14 @@ action = function(host, port)
     return stdnse.format_output(false, "Failed to send HEL: %s", err)
   end
 
-  -- Receive ACK response (read up to 1024 bytes)
+  -- Receive ACK response. The ACK is a small fixed-size message (28 bytes),
+  -- so a single receive is sufficient; receive() returns (status, data|err).
   local response
-  status, response, err = socket:receive_buf(nil, 1024)
+  status, response = socket:receive()
   socket:close()
 
   if not status then
-    return stdnse.format_output(false, "Failed to receive ACK: %s", err)
+    return stdnse.format_output(false, "Failed to receive ACK: %s", response)
   end
 
   if #response == 0 then

@@ -1,4 +1,3 @@
-local bin = require "bin"
 local nmap = require "nmap"
 local shortport = require "shortport"
 local stdnse = require "stdnse"
@@ -54,8 +53,10 @@ local function extract_string(blob, start)
   if not blob or start > #blob then
     return "", start
   end
-  local pos, s = bin.unpack("z", blob, start)
-  if s then
+  -- string.unpack("z", ...) returns (value, next_pos) and throws if the
+  -- remaining bytes contain no null terminator, so guard with pcall.
+  local ok, s, pos = pcall(string.unpack, "z", blob, start)
+  if ok and s then
     -- Keep only printable ASCII
     local clean = s:gsub("[^%g ]", "")
     return clean, pos
@@ -193,12 +194,7 @@ action = function(host, port)
   end
   socket:set_timeout(timeout)
 
-  local catch = function()
-    socket:close()
-  end
-  local try = nmap.new_try(catch)
-
-  local constatus, conerr = try(socket:connect(host, port))
+  local constatus, conerr = socket:connect(host, port)
   if not constatus then
     stdnse.debug1("Error connecting to %s:%d - %s", host.ip, port.number, conerr)
     return nil

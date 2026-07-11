@@ -1,4 +1,3 @@
-local bin = require "bin"
 local nmap = require "nmap"
 local shortport = require "shortport"
 local stdnse = require "stdnse"
@@ -58,7 +57,7 @@ end
 action = function(host, port)
   -- ProConOS query packet: 0xcc header + request data
   -- This is the standard probe that requests PLC identification
-  local req_info = bin.pack("H",
+  local req_info = stdnse.fromhex(
     "cc01000b0000000000000000000000000000" ..
     "0000000000000000000000000000000000000000" ..
     "0000000000000000000000000000000000000000" ..
@@ -72,12 +71,7 @@ action = function(host, port)
   local socket = nmap.new_socket()
   socket:set_timeout(5000)
 
-  local catch = function()
-    socket:close()
-  end
-  local try = nmap.new_try(catch)
-
-  local constatus, conerr = try(socket:connect(host, port))
+  local constatus, conerr = socket:connect(host, port)
   if not constatus then
     stdnse.debug1("Error connecting to %s:%d - %s", host.ip, port.number, conerr)
     return nil
@@ -103,35 +97,53 @@ action = function(host, port)
     return nil
   end
 
-  local pos, check1 = bin.unpack("C", response, 1)
+  local check1 = string.byte(response, 1)
+
+  -- Read a null-terminated string at the given 1-based offset.
+  -- string.unpack("z", ...) returns (value, next_pos) and throws if the
+  -- remaining bytes contain no null terminator, so guard with pcall.
+  local function read_z(off)
+    if not off or off > #response then
+      return nil, off
+    end
+    local ok, val, newpos = pcall(string.unpack, "z", response, off)
+    if not ok then
+      return nil, off
+    end
+    return val, newpos
+  end
 
   if check1 == 0xcc then
     set_nmap(host, port)
 
-    -- Parse null-terminated strings at known offsets
-    -- Offset 13: Ladder Logic Runtime string
-    if #response >= 13 then
-      pos, output["Ladder Logic Runtime"] = bin.unpack("z", response, 13)
+    local pos
+
+    -- Parse null-terminated strings at known offsets. The wire format places
+    -- these fields at 0-based byte offsets 13, 45 and 78; Lua string positions
+    -- are 1-based, so they live at positions 14, 46 and 79.
+    -- Position 14: Ladder Logic Runtime string
+    if #response >= 14 then
+      output["Ladder Logic Runtime"], pos = read_z(14)
     end
 
-    -- Offset 45: PLC Type string
-    if #response >= 45 then
-      pos, output["PLC Type"] = bin.unpack("z", response, 45)
+    -- Position 46: PLC Type string
+    if #response >= 46 then
+      output["PLC Type"], pos = read_z(46)
     end
 
-    -- Offset 78: Project Name
-    if #response >= 78 then
-      pos, output["Project Name"] = bin.unpack("z", response, 78)
+    -- Position 79: Project Name
+    if #response >= 79 then
+      output["Project Name"], pos = read_z(79)
     end
 
     -- Remaining offset: Boot Project
     if pos and pos <= #response then
-      pos, output["Boot Project"] = bin.unpack("z", response, pos)
+      output["Boot Project"], pos = read_z(pos)
     end
 
     -- Remaining offset: Project Source Code status
     if pos and pos <= #response then
-      pos, output["Project Source Code"] = bin.unpack("z", response, pos)
+      output["Project Source Code"], pos = read_z(pos)
     end
 
     socket:close()

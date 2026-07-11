@@ -1,4 +1,3 @@
-local bin = require "bin"
 local nmap = require "nmap"
 local shortport = require "shortport"
 local stdnse = require "stdnse"
@@ -86,9 +85,9 @@ local VERSION_DATA_SZ   = 16       -- version string length
 -- @return     3-character string
 local function pack_u24_le(val)
   return string.char(
-    bit32.band(val, 0xFF),
-    bit32.band(bit32.rshift(val, 8), 0xFF),
-    bit32.band(bit32.rshift(val, 16), 0xFF)
+    val & 0xFF,
+    (val >> 8) & 0xFF,
+    (val >> 16) & 0xFF
   )
 end
 
