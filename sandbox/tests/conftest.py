@@ -61,7 +61,10 @@ def mock_server():
 
     yield _start
     for m in started:
-        m.stop()
+        try:
+            m.stop()
+        except Exception:
+            pass
 
 
 def parse_fields(out):
@@ -86,4 +89,7 @@ def nmap_scan(port, script_path, script_args=None):
     if script_args:
         cmd += ["--script-args", script_args]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-    return parse_fields(proc.stdout), proc.stdout
+    out = proc.stdout
+    if proc.returncode != 0:
+        out += f"\n[nmap exited {proc.returncode}]\n{proc.stderr}"
+    return parse_fields(out), out
