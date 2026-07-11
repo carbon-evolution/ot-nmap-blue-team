@@ -27,3 +27,6 @@ build/
 # Temp / Logs
 *.log
 /tmp/
+
+# Test artifacts
+sandbox/test-results/

@@ -6,7 +6,7 @@ Starts lightweight TCP/UDP servers that respond with realistic
 OT device data, so nmap NSE scripts can be tested in a sandbox.
 
 Usage:
-    # Start all mocks
+    # Start all mocks (original + lesser-known protocol servers)
     python3 ot_mock_servers.py --all
 
     # Start a single mock
@@ -15,15 +15,28 @@ Usage:
     python3 ot_mock_servers.py --fox
     python3 ot_mock_servers.py --pcworx
     python3 ot_mock_servers.py --profibus
+    python3 ot_mock_servers.py --melsecq
+    python3 ot_mock_servers.py --opcua
+    python3 ot_mock_servers.py --proconos
+    python3 ot_mock_servers.py --gesrtp
+    python3 ot_mock_servers.py --redlion
+    python3 ot_mock_servers.py --ffhse
+
+    # Start a group
+    python3 ot_mock_servers.py --all-lesser-known
+    python3 ot_mock_servers.py --all-legacy
 """
 
 import argparse
+import os
+import select
+import signal
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
-import sys
-import select
 
 # ============================================================
 # MODBUS (TCP 502)
@@ -670,47 +683,144 @@ def mms_server(stop_event, port=102):
 
 
 # ============================================================
+# Standalone server launchers (subprocess wrappers)
+# ============================================================
+
+_subprocesses = []
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+def _launch_standalone(script_name, port, args=None):
+    """Launch a standalone mock server as a subprocess, tracking it for cleanup."""
+    script_path = os.path.join(_script_dir, script_name)
+    if not os.path.exists(script_path):
+        print(f"  [WARN] {script_name} not found at {script_path}, skipping")
+        return None
+    cmd = [sys.executable, script_path, "--port", str(port)]
+    if args:
+        cmd.extend(args)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _subprocesses.append(proc)
+    return proc
+
+
+def _make_standalone_wrapper(script_name, extra_args=None):
+    """Factory: creates a server wrapper that launches a standalone script as subprocess."""
+    def wrapper(stop_event, port):
+        proc = _launch_standalone(script_name, port, args=extra_args)
+        if proc is None:
+            return  # script not found; just pass
+        # Wait until stop is signaled
+        while not stop_event.is_set():
+            try:
+                proc.wait(timeout=0.5)
+                break  # process exited
+            except subprocess.TimeoutExpired:
+                continue
+    return wrapper
+
+
+def _stop_subprocesses():
+    """Terminate all tracked subprocesses."""
+    for proc in _subprocesses:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+    _subprocesses.clear()
+
+
+# Standalone wrappers for the 6 lesser-known protocol servers
+melsecq_launcher = _make_standalone_wrapper("melsecq_mock_server.py")
+opcua_launcher = _make_standalone_wrapper("opcua_mock_server.py")
+proconos_launcher = _make_standalone_wrapper("proconos_mock_server.py")
+gesrtp_launcher = _make_standalone_wrapper("gesrtp_mock_server.py")
+redlion_launcher = _make_standalone_wrapper("redlion_mock_server.py")
+ffhse_launcher = _make_standalone_wrapper("ffhse_mock_server.py")
+
+
+# ============================================================
 # MAIN - Argument parsing and server orchestration
 # ============================================================
 
 SERVERS = {
+    # Original inline servers (legacy OT protocols)
     "modbus": (modbus_server, 502),
     "hartip": (hartip_server, 5094),
     "fox": (fox_server, 1911),
     "pcworx": (pcworx_server, 1962),
     "profinet": (profinet_server, 34964),
     "mms": (mms_server, 102),
+    # Standalone subprocess servers (lesser-known OT protocols)
+    "melsecq": (melsecq_launcher, 5007),
+    "opcua": (opcua_launcher, 4840),
+    "proconos": (proconos_launcher, 20547),
+    "gesrtp": (gesrtp_launcher, 18245),
+    "redlion": (redlion_launcher, 44818),
+    "ffhse": (ffhse_launcher, 1089),
 }
+
+# Server groups
+SERVERS_LEGACY = ["modbus", "hartip", "fox", "pcworx", "profinet", "mms"]
+SERVERS_LESSER_KNOWN = ["melsecq", "opcua", "proconos", "gesrtp", "redlion", "ffhse"]
 
 def main():
     parser = argparse.ArgumentParser(description="OT Protocol Mock Servers")
-    parser.add_argument("--all", action="store_true", help="Start all mock servers")
+    # Server groups
+    parser.add_argument("--all", action="store_true", help="Start ALL mock servers")
+    parser.add_argument("--all-legacy", action="store_true", help="Start legacy OT protocol servers (modbus, hartip, fox, pcworx, profinet, mms)")
+    parser.add_argument("--all-lesser-known", action="store_true", help="Start lesser-known OT protocol servers (melsecq, opcua, proconos, gesrtp, redlion, ffhse)")
+    # Legacy server flags
     parser.add_argument("--modbus", action="store_true", help="Start Modbus mock")
     parser.add_argument("--hartip", action="store_true", help="Start HART-IP mock")
     parser.add_argument("--fox", action="store_true", help="Start Fox mock")
     parser.add_argument("--pcworx", action="store_true", help="Start PCWorx mock")
     parser.add_argument("--profinet", action="store_true", help="Start PROFINET mock")
     parser.add_argument("--mms", action="store_true", help="Start IEC 61850 MMS mock")
+    # Lesser-known server flags
+    parser.add_argument("--melsecq", action="store_true", help="Start MELSEC-Q mock (port 5007)")
+    parser.add_argument("--opcua", action="store_true", help="Start OPC UA mock (port 4840)")
+    parser.add_argument("--proconos", action="store_true", help="Start ProConOS mock (port 20547)")
+    parser.add_argument("--gesrtp", action="store_true", help="Start GE-SRTP mock (port 18245)")
+    parser.add_argument("--redlion", action="store_true", help="Start Red Lion mock (port 44818)")
+    parser.add_argument("--ffhse", action="store_true", help="Start FF HSE mock (port 1089)")
     parser.add_argument("--list", action="store_true", help="List available servers and ports")
 
     args = parser.parse_args()
 
     if args.list:
         print("Available mock servers:")
-        for name, (_, port) in SERVERS.items():
-            print(f"  {name:12s} -> TCP/UDP {port}")
+        print(f"\n  {'[ Legacy Protocols ]':-^48s}")
+        for name in SERVERS_LEGACY:
+            _, port = SERVERS[name]
+            print(f"  {name:20s} -> TCP/UDP {port}")
+        print(f"\n  {'[ Lesser-Known Protocols ]':-^48s}")
+        for name in SERVERS_LESSER_KNOWN:
+            _, port = SERVERS[name]
+            print(f"  {name:20s} -> TCP/UDP {port}")
         return
 
     to_start = []
     if args.all:
         to_start = list(SERVERS.keys())
+    elif args.all_legacy:
+        to_start = SERVERS_LEGACY
+    elif args.all_lesser_known:
+        to_start = SERVERS_LESSER_KNOWN
     else:
         for name in SERVERS:
             if getattr(args, name.replace("-", "_"), False):
                 to_start.append(name)
 
     if not to_start:
-        print("No servers specified. Use --all or pick one: --modbus, --hartip, --fox, --pcworx, --profinet, --mms")
+        print("No servers specified. Use --all, --all-legacy, --all-lesser-known, or pick one:")
+        print("  --modbus --hartip --fox --pcworx --profinet --mms")
+        print("  --melsecq --opcua --proconos --gesrtp --redlion --ffhse")
         return
 
     stop_event = threading.Event()
@@ -742,6 +852,8 @@ def main():
         stop_event.set()
         for t in threads:
             t.join(timeout=2)
+        # Stop any standalone subprocess servers
+        _stop_subprocesses()
         print("All servers stopped.")
 
 

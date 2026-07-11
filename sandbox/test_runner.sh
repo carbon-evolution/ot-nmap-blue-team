@@ -164,8 +164,8 @@ data += b'\x00'     # network no
 data += b'\xFF'     # PC no
 data += b'\xFF\x03' # request dest module I/O no
 data += b'\x00'     # request dest module station no
-data += struct.pack('<H', 12)  # request data length (12 bytes after this)
-data += b'\x00\x00\x10'  # timer (1.0s)
+data += struct.pack('<I', 7)[:3]  # dlen=7 (timer 3 + cmd 2 + subcmd 2)
+data += b'\x00\x00\x00'  # timer (3 bytes)
 data += b'\x01\x01'  # command: CPU type read
 data += b'\x00\x00'  # subcommand
 
