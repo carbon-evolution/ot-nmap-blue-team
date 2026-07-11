@@ -1,0 +1,18 @@
+Sending INIT (56b): 000000010000000000000000...
+INIT_ACK (56b): 000100010006000000010000...
+  Type=0x0001 Index=0x0001 DataLen=6
+Sending REQ (56b): 000200020004000000000000...
+REQ_ACK (56b): 000300020032000000004745...
+  Type=0x0003 Index=0x0002 DataLen=50
+  Status=0x0000
+  Model: [GE PACSystems RX3i]
+  Firmware: [V9.50]
+  CPU: [IC695CPE302]
+
+=== Expected nmap output ===
+PORT      STATE  SERVICE
+18245/tcp open  ge-srtp
+| gesrtp-info-improved:
+|     GE PACSystems RX3i
+|     V9.50
+|     IC695CPE302

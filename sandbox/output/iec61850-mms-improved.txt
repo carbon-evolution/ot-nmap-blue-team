@@ -1,0 +1,29 @@
+# Sample Output: iec61850-mms-improved.nse
+# Run against an IEC 61850 MMS server (port 102)
+# Demonstrates: OT-safe default timeout (5000ms), socket cleanup on errors
+
+## Command
+nmap -p 102 --script improved-scripts/iec61850-mms-improved.nse <target>
+
+Starting Nmap 7.99 ( https://nmap.org ) at 2026-07-11 08:00 +0800
+Nmap scan report for 192.168.1.50
+Host is up (0.0015s latency).
+
+PORT    STATE SERVICE
+102/tcp open  iso-tsap
+| iec61850-mms-improved:
+|   modelName_identify: MMS-LITE-80X-001
+|   productFamily: High End Meter
+|   vendorName: Schneider Electric
+|   vendorName_identify: SISCO
+|   serialNumber: ME-1810A424-02
+|   modelNumber: 8000
+|   modelNumber_identify: 6.0000.3
+|   firmwareVersion: 001.004.003
+|_  configuration: 2022-08-19 08:27:20
+
+## Notes
+- Default timeout raised to 5000ms (was 500ms in original)
+- Socket cleanup on all error paths (connect failure, send failure, receive failure, decode failure)
+- The 500ms default in the original caused frequent timeouts on real IEC 61850 devices
+- Configurable via --script-args iec61850-mms.timeout=10000

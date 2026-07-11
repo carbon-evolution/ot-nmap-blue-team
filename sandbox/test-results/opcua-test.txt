@@ -1,0 +1,11 @@
+Sending HEL (24b)
+Response (0b): 
+Unexpected response: b''
+
+=== Expected nmap output ===
+PORT      STATE   SERVICE
+4840/tcp  open    opcua-tcp
+| opcua-discovery-improved:
+|   Application Name: OPC UA Mock Server
+|   Application URI: urn:OPCUA:MockServer
+|_  Endpoints available: 2

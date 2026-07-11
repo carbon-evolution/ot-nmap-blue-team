@@ -1,0 +1,35 @@
+# Sample Output: hartip-info-improved.nse
+# Run against a HART-IP gateway (port 5094)
+# Demonstrates: expanded device tables (~40 manufacturers/devices), socket leak fixes
+
+## Command
+nmap -p 5094 --script improved-scripts/hartip-info-improved.nse \
+  --script-args 'hartip-info.timeout=3000' \
+  <target>
+
+## Output
+Starting Nmap 7.99 ( https://nmap.org ) at 2026-07-11 08:00 +0800
+Nmap scan report for 172.16.10.90
+Host is up (0.0009s latency).
+
+PORT     STATE SERVICE
+5094/tcp open  hart-ip
+| hartip-info-improved:
+|   Device Information:
+|     IP Address: 172.16.10.90
+|     Long Tag: BOILER-FEED-PUMP-03
+|     Expanded Device Type: GW PL ETH/UNI-BUS
+|     Manufacturer ID: Phoenix Contact
+|     Device ID: dd4ee3
+|     Device Revision: 1
+|     Software Revision: 1
+|     HART Protocol Major Revision: 7
+|     Private Label Distributor: Phoenix Contact
+|   Sub-Device Information:
+|_    Error Code: 2
+
+## Notes
+- Manufacturer table expanded to ~40 entries (was ~10 in original)
+- Device type table expanded to ~13 entries (was ~3 in original)
+- Configurable timeout via --script-args hartip-info.timeout
+- Socket cleanup on all error paths (prevents file descriptor leaks)

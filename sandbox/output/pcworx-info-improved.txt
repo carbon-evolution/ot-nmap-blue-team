@@ -1,0 +1,25 @@
+# Sample Output: pcworx-info-improved.nse
+# Run against a Phoenix Contact PCWorx PLC (port 1962)
+# Demonstrates: socket leak fix, socket timeout
+
+## Command
+nmap -p 1962 --script improved-scripts/pcworx-info-improved.nse <target>
+
+## Output
+Starting Nmap 7.99 ( https://nmap.org ) at 2026-07-11 08:39 +0800
+Nmap scan report for localhost (127.0.0.1)
+Host is up (0.000071s latency).
+
+PORT     STATE SERVICE
+1962/tcp open  biap-mp
+| pcworx-info-improved:
+|   PLC Type: ILC 330 ETH
+|   Model Number: 2737193
+|   Firmware Version: 3.95T
+|   Firmware Date: Mar  2 2012
+|_  Firmware Time: 09:39:02
+
+## Notes
+- Socket timeout explicitly set via socket:set_timeout(stdnse.get_timeout(host))
+- Socket leak fixed: catch handler properly closes socket on error
+- 5000ms fallback timeout when --host-timeout is not specified

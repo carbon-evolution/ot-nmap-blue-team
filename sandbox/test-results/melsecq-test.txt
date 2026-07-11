@@ -1,0 +1,10 @@
+Sending MC protocol request (13b): 005000ffff00ff000000010001
+Response (29b): d00000ffff0300120000004d454c5345432d5120536572696573000000
+
+=== Expected nmap output ===
+PORT      STATE  SERVICE
+5007/tcp  open   melsec-q
+| melsecq-info-improved:
+|   PLC Type: Q03UDVCPU
+|   Series: MELSEC-Q Series
+|_  Firmware: 1.20

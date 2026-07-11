@@ -1,0 +1,31 @@
+# Sample Output: modbus-discover-improved.nse
+# Run against a Modbus TCP device (port 502)
+# Demonstrates: configurable timeout, SID range args, improved non-aggressive mode
+#
+# Command:
+#   nmap -p 502 --script improved-scripts/modbus-discover-improved.nse \
+#     --script-args 'modbus-discover.sid-start=1,modbus-discover.sid-end=10' \
+#     <target>
+
+Starting Nmap 7.99 ( https://nmap.org ) at 2026-07-11 08:00 +0800
+Nmap scan report for 192.168.1.100
+Host is up (0.0012s latency).
+
+PORT    STATE SERVICE
+502/tcp open  modbus
+| modbus-discover-improved:
+|   sid 0x01:
+|     Slave ID data: \xFA\xFFPM710PowerMeter
+|     Device identification: Schneider Electric PM710 v03.110
+|   sid 0x02:
+|     Slave ID data: \xFA\xFFSE-6000Relay
+|     Device identification: Schneider Electric SE-6000 v02.004
+|   sid 0x05:
+|     error: GATEWAY TARGET DEVICE FAILED TO RESPONSE
+|   sid 0x0a:
+|_    error: SLAVE DEVICE BUSY
+
+# Notes:
+#   - SID range 1-10 scanned (non-aggressive mode, instead of all 246)
+#   - Timeout customized via --script-args (default falls back to --host-timeout)
+#   - Non-aggressive: stops after first SID that responds
