@@ -1,8 +1,12 @@
 # OT Nmap Blue Team — Improved NSE Scripts for OT/ICS Protocol Discovery
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Honeypot-Grade](https://img.shields.io/badge/Honeypot-Grade-purple)](sandbox/)
+[![NSE](https://img.shields.io/badge/NSE-13%20scripts-blue)](improved-scripts/)
 
 A collection of **improved Nmap NSE (Scripting Engine) scripts** for discovering, fingerprinting, and auditing OT/ICS (Operational Technology / Industrial Control Systems) protocols. Designed for **blue-team security assessments**, asset inventory, and vulnerability management.
+
+> ⚡ **Honeypot-Grade Mock Servers**: All 6 lesser-known protocol servers (GE SRTP, OPC UA, Red Lion, FF HSE, MELSEC-Q, ProConOS) are built as **production-quality honeypots** — full protocol state machines, profile-based device identities, register/tag read-write, alarm engines, detection logging, and scan delay simulation. See [sandbox README](sandbox/) for details.
 
 Covers **13 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IEC 61850 MMS, PROFINET, GE SRTP, OPC UA, MELSEC-Q, ProConOS, Red Lion Crimson, and Foundation Fieldbus HSE.
 
@@ -236,6 +240,8 @@ PORT      STATE  SERVICE
 
 ## 🧪 Testing with Mock Servers
 
+> 🔥 **Honeypot-Grade Emulation**: 6 of the protocol servers are built as full-fledged **honeypots** — complete state machines, profile-based device identities, session tracking, memory/register read-write, alarm engines, and structured detection logging. They're indistinguishable from real OT devices during NSE scanning.
+
 This repository includes Python mock servers for every NSE script, enabling safe testing without connecting to real OT devices.
 
 ### Prerequisites
@@ -248,18 +254,24 @@ nmap             # For running the NSE scripts
 ```bash
 cd sandbox/
 
-# Start mock servers
-python3 melsecq_mock_server.py &
-python3 opcua_mock_server.py &
-python3 gesrtp_mock_server.py &
+# Start all 6 honeypot-grade servers
+python3 melsecq_mock_server.py --port 5007 &
+python3 opcua_mock_server.py --port 4840 --profile siemens_s7 &
+python3 gesrtp_mock_server.py --port 18245 --profile rx3i &
+python3 redlion_mock_server.py --port 44818 --profile g310c2 &
+python3 ffhse_mock_server.py --port 1089 --profile tic101 &
+python3 proconos_mock_server.py --port 20547 &
 
-# In another terminal, run tests
+# In another terminal, run NSE tests against all 6
 nmap -p 5007 --script ../improved-scripts/lesser-known/melsecq-info-improved.nse 127.0.0.1
 nmap -p 4840 --script ../improved-scripts/lesser-known/opcua-discovery-improved.nse 127.0.0.1
 nmap -p 18245 --script ../improved-scripts/lesser-known/gesrtp-info-improved.nse 127.0.0.1
+nmap -p 44818 --script ../improved-scripts/lesser-known/redlion-cr3-info-improved.nse 127.0.0.1
+nmap -p 1089 --script ../improved-scripts/lesser-known/ff-hse-discover-improved.nse 127.0.0.1
+nmap -p 20547 --script ../improved-scripts/lesser-known/proconos-info-improved.nse 127.0.0.1
 
 # Clean up
-kill %1 %2 %3
+kill %1 %2 %3 %4 %5 %6
 ```
 
 ### Mock Server Reference
@@ -275,6 +287,21 @@ All 6 lesser-known protocol servers are built to **honeypot-grade** — they go 
 | `gesrtp_mock_server.py` | GE SRTP | 18245 | Full INIT→REQ state machine, SSTAT/LSTAT/CONFIG_INFO/MEM_READ/MEM_WRITE services, 3 profiles, connection tracking, detection logging, UDP support | Standalone |
 | `ffhse_mock_server.py` | FF HSE | 1089 | SM_IDENTIFY/MA_IDENTIFY/LREQ/LRES/LFIN/FMS_READ handlers, alarm engine, PV drift simulation, 4 profiles, detection logging | Standalone |
 | `redlion_mock_server.py` | Red Lion | 789 | Per-profile device identity + tag database, STX command set (read/write tags, login, config), write tag logging (0x12), scan delay, 4 profiles | Requires root (<1024) |
+
+### What Makes Them Honeypot-Grade
+
+The 6 standalone servers go far beyond simple canned responses:
+
+| Capability | What It Means |
+|------------|---------------|
+| **Full protocol state machines** | Multi-message handshakes (OPC UA: HEL→ACK→OPN→MSG→CLO, GE SRTP: INIT→REQ→ACK, FF HSE: LREQ→LRES→LFIN) not just single-shot replies |
+| **Profile-based device identity** | Each `--profile` changes the device model, vendor, firmware, serial number, MAC address — emulating different real products |
+| **Memory & register read/write** | GE SRTP MEM_READ/MEM_WRITE (services 15/16), OPC UA Read/Browse/Write (services 631/525/634), Red Lion tag read/write (commands 0x02/0x12) |
+| **Per-profile tag databases** | Red Lion has 4 profile-specific HMI tag sets (TankLevel, PumpSpeed, Temperature, etc.) with realistic float/int/bool values |
+| **Alarm engines** | FF HSE generates simulated process alarms (HI_TEMP, HH_PRESSURE, SENSOR_FAIL) with weighted severity and active alarm reporting via LRES |
+| **Detection logging** | Every connection, probe, service request, and tag read/write is timestamped and logged with DETECTION severity — ready for SIEM ingestion |
+| **Scan delay simulation** | Random 5–200ms response jitter per protocol to avoid script-like instant replies that fingerprint mock servers |
+| **Graceful degradation** | TCP fragmentation handling (`recv_exactly`), connection reset recovery, proper error codes for invalid requests — behaves like a real device |
 
 ### Test Results
 
