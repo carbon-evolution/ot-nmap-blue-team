@@ -4,6 +4,10 @@
 [![Honeypot-Grade](https://img.shields.io/badge/Honeypot-Grade-purple)](sandbox/)
 [![NSE](https://img.shields.io/badge/NSE-13%20scripts-blue)](improved-scripts/)
 
+<p align="center">
+  <img src="banner.png" alt="OT Nmap Blue Team — Honeypot-Grade ICS Protocol Emulation" width="100%">
+</p>
+
 A collection of **improved Nmap NSE (Scripting Engine) scripts** for discovering, fingerprinting, and auditing OT/ICS (Operational Technology / Industrial Control Systems) protocols. Designed for **blue-team security assessments**, asset inventory, and vulnerability management.
 
 > ⚡ **Honeypot-Grade Mock Servers**: All 6 lesser-known protocol servers (GE SRTP, OPC UA, Red Lion, FF HSE, MELSEC-Q, ProConOS) are built as **production-quality honeypots** — full protocol state machines, profile-based device identities, register/tag read-write, alarm engines, detection logging, and scan delay simulation. See [sandbox README](sandbox/) for details.
