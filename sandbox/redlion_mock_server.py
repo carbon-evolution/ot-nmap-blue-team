@@ -11,7 +11,22 @@ Supports two protocol modes:
   1. Legacy identification probe (16-byte zero-filled) — backward compatible
      with NSE scripts like redlion-cr3-info-improved.nse
   2. STX-framed command/response protocol (0x02/0x03 framing) with multiple
-     command handlers, password challenge-response, and tag database
+     command handlers, password challenge-response, tag database, and
+     write tag support
+
+Each device model profile presents a distinct identity (name, serial, firmware,
+MAC, part number) and a curated tag database with realistic industrial HMI
+tag values, types, and jitter simulation.
+
+Features:
+  - Per-profile device identity (model, serial, firmware, MAC, part number)
+  - Per-profile tag databases with realistic float/int/bool values
+  - Read/write tag operations (commands 0x02 and 0x12)
+  - Scan delay simulation (5–25ms jitter on responses)
+  - Legacy 16-byte zero probe detection
+  - Login challenge-response (accepts any password — honeypot behavior)
+  - Detection logging for all commands and tag access
+  - Thread-per-connection architecture
 
 Usage:
     python3 redlion_mock_server.py
@@ -44,6 +59,11 @@ CMD_PROTOCOL_VERSION = 0x04
 CMD_READ_STATUS = 0x05
 CMD_LOGIN_CHALLENGE = 0x10
 CMD_LOGIN_RESPONSE = 0x11
+CMD_WRITE_TAG_VALUE = 0x12
+
+TAG_TYPE_FLOAT = 0
+TAG_TYPE_INT = 1
+TAG_TYPE_BOOL = 2
 
 PROTOCOL_VERSION_STRING = "Crimson v3.0"
 
@@ -56,6 +76,7 @@ DEVICE_MODELS = {
         "memory": "16MB",
         "vendor": "Red Lion Controls",
         "hw_rev": "1.2A",
+        "mac": "00:1E:C0:07:C2:01",
     },
     "G308C2": {
         "firmware": "Crimson 3.1",
@@ -63,6 +84,7 @@ DEVICE_MODELS = {
         "memory": "32MB",
         "vendor": "Red Lion Controls",
         "hw_rev": "1.3B",
+        "mac": "00:1E:C0:08:C2:02",
     },
     "G310C2": {
         "firmware": "Crimson 3.2",
@@ -70,6 +92,7 @@ DEVICE_MODELS = {
         "memory": "32MB",
         "vendor": "Red Lion Controls",
         "hw_rev": "2.0A",
+        "mac": "00:1E:C0:10:C2:03",
     },
     "G315C2": {
         "firmware": "Crimson 3.3",
@@ -77,6 +100,7 @@ DEVICE_MODELS = {
         "memory": "64MB",
         "vendor": "Red Lion Controls",
         "hw_rev": "2.1B",
+        "mac": "00:1E:C0:15:C2:04",
     },
 }
 
@@ -91,6 +115,48 @@ TAG_NAME_POOL = [
     "EncoderPosition", "PIDOutput", "CycleCount", "BatchTotal",
 ]
 
+# ── Per-profile tag databases ────────────────────────────────────────
+
+PROFILE_TAGS = {
+    "G307C2": {
+        "TankLevel": (45.2, TAG_TYPE_FLOAT),
+        "PumpSpeed": (1200, TAG_TYPE_INT),
+        "Temperature": (78.3, TAG_TYPE_FLOAT),
+        "ValvePosition": (33.7, TAG_TYPE_FLOAT),
+        "PumpStatus": (1, TAG_TYPE_BOOL),
+    },
+    "G308C2": {
+        "TankLevel": (72.8, TAG_TYPE_FLOAT),
+        "PumpSpeed": (1800, TAG_TYPE_INT),
+        "Temperature": (82.1, TAG_TYPE_FLOAT),
+        "Pressure": (145.2, TAG_TYPE_FLOAT),
+        "FlowRate": (8.6, TAG_TYPE_FLOAT),
+        "ValvePosition": (45.2, TAG_TYPE_FLOAT),
+        "PumpStatus": (1, TAG_TYPE_BOOL),
+    },
+    "G310C2": {
+        "TankLevel": (88.3, TAG_TYPE_FLOAT),
+        "PumpSpeed": (2400, TAG_TYPE_INT),
+        "Temperature": (91.7, TAG_TYPE_FLOAT),
+        "Pressure": (165.8, TAG_TYPE_FLOAT),
+        "FlowRate": (12.4, TAG_TYPE_FLOAT),
+        "ValvePosition": (62.1, TAG_TYPE_FLOAT),
+        "PumpStatus": (1, TAG_TYPE_BOOL),
+        "MotorCurrent": (35.2, TAG_TYPE_FLOAT),
+    },
+    "G315C2": {
+        "TankLevel": (95.1, TAG_TYPE_FLOAT),
+        "PumpSpeed": (3000, TAG_TYPE_INT),
+        "Temperature": (105.2, TAG_TYPE_FLOAT),
+        "Pressure": (188.9, TAG_TYPE_FLOAT),
+        "FlowRate": (15.7, TAG_TYPE_FLOAT),
+        "ValvePosition": (78.4, TAG_TYPE_FLOAT),
+        "PumpStatus": (1, TAG_TYPE_BOOL),
+        "MotorCurrent": (45.6, TAG_TYPE_FLOAT),
+        "PowerUsage": (12500, TAG_TYPE_INT),
+    },
+}
+
 # ── Global server state (thread-safe via lock) ───────────────────────
 
 _global_lock = threading.Lock()
@@ -99,30 +165,55 @@ _active_sessions = 0
 _error_count = 0
 _server_start = time.time()
 
-# Unique per-run serial number
-_serial_number = "RL-{}-{:04X}".format(
-    time.strftime("%Y%m%d"), random.randint(0, 0xFFFF)
-)
-
 
 # ══════════════════════════════════════════════════════════════════════
 #  Tag Database
 # ══════════════════════════════════════════════════════════════════════
 
 class TagDatabase:
-    """In-memory simulated HMI tag database with value jitter."""
+    """In-memory simulated HMI tag database with value jitter and type tracking."""
 
-    def __init__(self, num_tags=10):
+    def __init__(self, num_tags=10, initial_tags=None):
         self._tags = {}
-        names = random.sample(
-            TAG_NAME_POOL, min(num_tags, len(TAG_NAME_POOL))
-        )
-        # If we need more tags than the pool, generate numbered extras
-        if len(names) < num_tags:
-            for i in range(num_tags - len(names)):
-                names.append(f"UserTag_{i + 1}")
-        for name in names:
-            self._tags[name] = self._generate_base(name)
+
+        if initial_tags:
+            # Start with profile-defined tags — preserve insertion order
+            for name, (value, tag_type) in initial_tags.items():
+                self._tags[name] = (value, tag_type)
+            # Fill remaining slots with random tags if num_tags > profile count
+            remaining = num_tags - len(initial_tags)
+            if remaining > 0:
+                pool = [n for n in TAG_NAME_POOL if n not in initial_tags]
+                if pool:
+                    names = random.sample(pool, min(remaining, len(pool)))
+                    for name in names:
+                        value = self._generate_base(name)
+                        tag_type = self._infer_type(value, name)
+                        self._tags[name] = (value, tag_type)
+        else:
+            # Legacy random-fill behavior (no profile specified)
+            names = random.sample(
+                TAG_NAME_POOL, min(num_tags, len(TAG_NAME_POOL))
+            )
+            if len(names) < num_tags:
+                for i in range(num_tags - len(names)):
+                    names.append(f"UserTag_{i + 1}")
+            for name in names:
+                value = self._generate_base(name)
+                tag_type = self._infer_type(value, name)
+                self._tags[name] = (value, tag_type)
+
+    @staticmethod
+    def _infer_type(value, name):
+        """Infer tag type from value shape and name hints."""
+        nl = name.lower()
+        if "status" in nl or "alarm" in nl or "cycle" in nl or "batch" in nl:
+            return TAG_TYPE_INT
+        if "pump" in nl and "speed" not in nl and "power" not in nl:
+            return TAG_TYPE_BOOL
+        if isinstance(value, int) and not isinstance(value, bool):
+            return TAG_TYPE_INT
+        return TAG_TYPE_FLOAT
 
     @staticmethod
     def _generate_base(name):
@@ -161,30 +252,64 @@ class TagDatabase:
         return round(random.uniform(0, 1000), 2)
 
     def read(self, name):
-        """Read a tag value with slight jitter to simulate real-world drift."""
+        """Read a tag value with slight jitter.
+
+        Returns (value, tag_type) or (None, None) if the tag doesn't exist.
+        Bool tags return their stored value without jitter.
+        """
         if name not in self._tags:
-            return None
-        base = self._tags[name]
-        jitter = base * random.uniform(-0.03, 0.03)
-        if isinstance(base, int):
-            return int(round(base + jitter))
-        return round(base + jitter, 2)
+            return None, None
+        base_value, tag_type = self._tags[name]
+
+        if tag_type == TAG_TYPE_BOOL:
+            return base_value, tag_type  # discrete — no jitter
+
+        jitter = base_value * random.uniform(-0.03, 0.03)
+        if tag_type == TAG_TYPE_INT:
+            return int(round(base_value + jitter)), tag_type
+        return round(base_value + jitter, 2), tag_type
+
+    def write(self, name, value):
+        """Write a new value to a tag. Returns True on success."""
+        if name not in self._tags:
+            return False
+        _, tag_type = self._tags[name]
+        # Cast to the native type for this tag
+        if tag_type == TAG_TYPE_INT:
+            value = int(round(value))
+        elif tag_type == TAG_TYPE_BOOL:
+            value = 1 if value else 0
+        elif tag_type == TAG_TYPE_FLOAT:
+            value = round(float(value), 2)
+        self._tags[name] = (value, tag_type)
+        return True
+
+    def get_type(self, name):
+        """Return the type constant for a tag, or TAG_TYPE_FLOAT if unknown."""
+        if name not in self._tags:
+            return TAG_TYPE_FLOAT
+        return self._tags[name][1]
 
     @property
     def names(self):
         return list(self._tags.keys())
+
+    @property
+    def tag_count(self):
+        return len(self._tags)
 
 
 # ══════════════════════════════════════════════════════════════════════
 #  Protocol helpers
 # ══════════════════════════════════════════════════════════════════════
 
-def build_legacy_device_info(model_key):
+def build_legacy_device_info(model_key, serial_number):
     """Build the legacy binary blob for a 16-byte zero-filled probe.
 
     This preserves backward compatibility with NSE scripts that send
     a 16-byte zero-filled identification probe and expect a fixed-offset
     binary response containing manufacturer, model, and firmware strings.
+    The serial number is model-specific (per-instance).
     """
     cfg = DEVICE_MODELS[model_key]
     buf = bytearray()
@@ -215,8 +340,8 @@ def build_legacy_device_info(model_key):
     while len(buf) < 80:
         buf.append(0x00)
 
-    # Serial number (80..103)
-    buf.extend(_serial_number.encode())
+    # Serial number (80..103) — now model-specific
+    buf.extend(serial_number.encode())
     buf.append(0x00)
     while len(buf) < 104:
         buf.append(0x00)
@@ -282,41 +407,86 @@ class RedLionHoneypot:
         self.port = port
         self.model_key = model_key
         self.cfg = DEVICE_MODELS[model_key]
-        self.tags = TagDatabase(num_tags)
-        self.legacy_resp = build_legacy_device_info(model_key)
+
+        # Per-instance serial number incorporating model name
+        self.serial = "RL-{}-{}-{:04X}".format(
+            model_key, time.strftime("%Y%m%d"), random.randint(0, 0xFFFF)
+        )
+
+        # Load per-profile tags (profile-defined + extras from pool)
+        profile_tags = PROFILE_TAGS.get(model_key, {})
+        self.tags = TagDatabase(num_tags, initial_tags=profile_tags)
+
+        # Build legacy response blob with per-instance serial
+        self.legacy_resp = build_legacy_device_info(model_key, self.serial)
         self.verbose = verbose
         self.log = logging.getLogger("redlion")
+
+    # ── Scan delay ───────────────────────────────────────────────
+
+    def _delay(self):
+        """Simulate real device processing latency (5–25ms)."""
+        time.sleep(random.uniform(0.005, 0.025))
 
     # ── Command handlers ──────────────────────────────────────────
 
     def _cmd_device_info(self):
         """CMD 0x01 — Read Device Info.
 
-        Returns model, firmware, part number, vendor, serial number as
-        null-terminated strings concatenated in the payload.
+        Returns model, firmware, part number, vendor, hardware revision,
+        serial number, and MAC address as null-terminated strings
+        concatenated in the payload — all varying by device profile.
         """
         data = b''
         for field in [self.model_key, self.cfg["firmware"],
-                      self.cfg["part_number"], self.cfg["vendor"],
-                      self.cfg["hw_rev"], _serial_number]:
+                       self.cfg["part_number"], self.cfg["vendor"],
+                       self.cfg["hw_rev"], self.serial,
+                       self.cfg["mac"]]:
             data += field.encode() + b'\x00'
         return build_stx_response(CMD_READ_DEVICE_INFO, data)
 
     def _cmd_tag_value(self, payload):
         """CMD 0x02 — Read Tag Value.
 
-        Payload is the tag name (null-terminated). Returns the tag's
-        current value packed as a 32-bit IEEE-754 float, or -1.0 if
-        the tag doesn't exist.
+        Payload is the tag name (null-terminated). Returns a type byte
+        followed by the value packed as a 32-bit IEEE-754 float, or
+        -1.0 if the tag doesn't exist.
         """
         raw_name = payload.split(b'\x00')[0] if b'\x00' in payload else payload
         tag_name = raw_name.decode("utf-8", errors="replace")
 
-        value = self.tags.read(tag_name)
-        if value is None:
+        raw = self.tags.read(tag_name)
+        if raw[0] is None:
             value = -1.0
-        data = struct.pack("<f", float(value))
+            tag_type = TAG_TYPE_FLOAT
+        else:
+            value, tag_type = raw
+        # Response: 1-byte type tag + 4-byte float value
+        data = bytes([tag_type]) + struct.pack("<f", float(value))
         return build_stx_response(CMD_READ_TAG_VALUE, data), tag_name
+
+    def _cmd_write_tag(self, payload):
+        """CMD 0x12 — Write Tag Value.
+
+        Payload format: null-terminated tag name followed by 4-byte
+        IEEE-754 float (little-endian). Returns 0x00 on success, 0x01
+        on failure (tag not found or malformed payload).
+        """
+        # Split on null byte to separate tag name and value
+        null_idx = payload.find(b'\x00')
+        if null_idx <= 0 or null_idx >= len(payload) - 1:
+            # Malformed: no null, empty name, or nothing after null
+            return build_stx_response(CMD_WRITE_TAG_VALUE, b'\x01'), None, None
+
+        tag_name = payload[:null_idx].decode("utf-8", errors="replace")
+        value_bytes = payload[null_idx + 1:]
+        if len(value_bytes) < 4:
+            return build_stx_response(CMD_WRITE_TAG_VALUE, b'\x01'), tag_name, None
+
+        value = struct.unpack("<f", value_bytes[:4])[0]
+        success = self.tags.write(tag_name, value)
+        result_code = b'\x00' if success else b'\x01'
+        return build_stx_response(CMD_WRITE_TAG_VALUE, result_code), tag_name, value
 
     def _cmd_config(self):
         """CMD 0x03 — Read Configuration.
@@ -330,7 +500,8 @@ class RedLionHoneypot:
             f"PartNumber={self.cfg['part_number']};"
             f"Memory={self.cfg['memory']};"
             f"HWRev={self.cfg['hw_rev']};"
-            f"Serial={_serial_number};"
+            f"Serial={self.serial};"
+            f"MAC={self.cfg['mac']};"
             f"Uptime={uptime}s;"
             f"Connections={_connection_count}"
         )
@@ -354,7 +525,7 @@ class RedLionHoneypot:
             f"ActiveSessions={_active_sessions};"
             f"Errors={_error_count};"
             f"Model={self.model_key};"
-            f"Serial={_serial_number}"
+            f"Serial={self.serial}"
         )
         return build_stx_response(CMD_READ_STATUS, status.encode())
 
@@ -364,7 +535,7 @@ class RedLionHoneypot:
         Returns 8 random bytes as a challenge token. The honeypot
         accepts any non-empty response in _cmd_login_response.
         """
-        challenge = bytes(random.randint(0, 255) for _ in range(8))
+        challenge = random.randbytes(8)
         return build_stx_response(CMD_LOGIN_CHALLENGE, challenge)
 
     def _cmd_login_response(self, payload):
@@ -415,6 +586,7 @@ class RedLionHoneypot:
                         "[%s] Legacy identification probe → device info",
                         client
                     )
+                    self._delay()
                     conn.sendall(self.legacy_resp)
                     self.log.info(
                         "[%s] TX (%d bytes): %s",
@@ -442,11 +614,13 @@ class RedLionHoneypot:
                 )
 
                 if cmd == CMD_READ_DEVICE_INFO:
+                    self._delay()
                     resp = self._cmd_device_info()
                     conn.sendall(resp)
                     self.log.info("[%s] → device info (%d bytes)", client, len(resp))
 
                 elif cmd == CMD_READ_TAG_VALUE:
+                    self._delay()
                     resp, tag_name = self._cmd_tag_value(payload)
                     conn.sendall(resp)
                     self.log.info(
@@ -456,21 +630,25 @@ class RedLionHoneypot:
                     )
 
                 elif cmd == CMD_READ_CONFIG:
+                    self._delay()
                     resp = self._cmd_config()
                     conn.sendall(resp)
                     self.log.info("[%s] → configuration (%d bytes)", client, len(resp))
 
                 elif cmd == CMD_PROTOCOL_VERSION:
+                    self._delay()
                     resp = self._cmd_protocol_version()
                     conn.sendall(resp)
                     self.log.info("[%s] → protocol version (%d bytes)", client, len(resp))
 
                 elif cmd == CMD_READ_STATUS:
+                    self._delay()
                     resp = self._cmd_status()
                     conn.sendall(resp)
                     self.log.info("[%s] → status (%d bytes)", client, len(resp))
 
                 elif cmd == CMD_LOGIN_CHALLENGE:
+                    self._delay()
                     challenge = self._cmd_login_challenge()
                     conn.sendall(challenge)
                     self.log.info(
@@ -480,6 +658,7 @@ class RedLionHoneypot:
                     )
 
                 elif cmd == CMD_LOGIN_RESPONSE:
+                    self._delay()
                     resp = self._cmd_login_response(payload)
                     conn.sendall(resp)
                     self.log.info(
@@ -488,7 +667,27 @@ class RedLionHoneypot:
                         client, len(resp), payload.hex(), payload.hex()
                     )
 
+                elif cmd == CMD_WRITE_TAG_VALUE:
+                    self._delay()
+                    resp, tag_name, write_value = self._cmd_write_tag(payload)
+                    if tag_name is not None:
+                        conn.sendall(resp)
+                        self.log.info(
+                            "[%s] → write tag '%s' = %s | "
+                            "DETECTION: TagWrite:%s=%s",
+                            client, tag_name, write_value,
+                            tag_name, write_value
+                        )
+                    else:
+                        conn.sendall(resp)
+                        self.log.warning(
+                            "[%s] → write tag failed (malformed payload) | "
+                            "DETECTION: TagWriteFailed",
+                            client
+                        )
+
                 else:
+                    self._delay()
                     self.log.warning(
                         "[%s] Unknown command 0x%02X | "
                         "DETECTION: UnknownCommand:0x%02X",
@@ -560,7 +759,7 @@ Use a higher port (e.g. --port 1789) to run without privileges.
     )
     parser.add_argument(
         "--num-tags", type=int, default=10, metavar="N",
-        help="Number of simulated HMI tags (default: 10)",
+        help="Number of simulated HMI tags (default: 10; profile-defined tags included first)",
     )
     parser.add_argument(
         "--verbose", action="store_true",
@@ -577,8 +776,14 @@ Use a higher port (e.g. --port 1789) to run without privileges.
     )
     log = logging.getLogger("redlion")
 
+    # Create honeypot first so we can show per-instance serial in the banner
+    honeypot = RedLionHoneypot(
+        args.host, args.port, args.model, args.num_tags, args.verbose
+    )
+
     # ── Banner ─────────────────────────────────────────────────
     cfg = DEVICE_MODELS[args.model]
+    profile_tag_count = len(PROFILE_TAGS.get(args.model, {}))
     log.info("=" * 60)
     log.info("Red Lion Crimson v3 Honeypot")
     log.info("=" * 60)
@@ -587,16 +792,14 @@ Use a higher port (e.g. --port 1789) to run without privileges.
     log.info("Part #:     %s", cfg["part_number"])
     log.info("HW Rev:     %s", cfg["hw_rev"])
     log.info("Memory:     %s", cfg["memory"])
-    log.info("Serial:     %s", _serial_number)
-    log.info("Tags:       %d simulated", args.num_tags)
+    log.info("MAC:        %s", cfg["mac"])
+    log.info("Serial:     %s", honeypot.serial)
+    log.info("Tags:       %d (%d profile-defined + %d pool extras)",
+             honeypot.tags.tag_count, profile_tag_count,
+             honeypot.tags.tag_count - profile_tag_count)
     log.info("Bind:       %s:%d", args.host, args.port)
     log.info("Verbose:    %s", args.verbose)
     log.info("=" * 60)
-
-    # ── Create honeypot ────────────────────────────────────────
-    honeypot = RedLionHoneypot(
-        args.host, args.port, args.model, args.num_tags, args.verbose
-    )
 
     # ── Server socket ──────────────────────────────────────────
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -264,15 +264,17 @@ kill %1 %2 %3
 
 ### Mock Server Reference
 
-| Mock Server | Protocol | Port | Notes |
-|-------------|----------|------|-------|
-| `ot_mock_servers.py` | All standard protocols | Various | All-in-one server |
-| `melsecq_mock_server.py` | MELSEC-Q | 5007 | Standalone |
-| `opcua_mock_server.py` | OPC UA | 4840 | Standalone |
-| `proconos_mock_server.py` | ProConOS | 20547 | Standalone |
-| `gesrtp_mock_server.py` | GE SRTP | 18245 | Standalone |
-| `ffhse_mock_server.py` | FF HSE | 1089 | Standalone |
-| `redlion_mock_server.py` | Red Lion | 789 | Requires root (< 1024) |
+All 6 lesser-known protocol servers are built to **honeypot-grade** — they go beyond static responses with realistic state machines, profile-based device identities, detection logging, and scan delay simulation.
+
+| Mock Server | Protocol | Port | Honeypot Features | Notes |
+|-------------|----------|------|-------------------|-------|
+| `ot_mock_servers.py` | All standard protocols | Various | — | All-in-one server (thin/legacy) |
+| `melsecq_mock_server.py` | MELSEC-Q | 5007 | Profiles, detection logging, scan delay | Standalone |
+| `opcua_mock_server.py` | OPC UA | 4840 | Full HEL→ACK→OPN→MSG→CLO state machine, FindServers/GetEndpoints/Read/Browse/Write handlers, 3 profiles, address space, detection logging | Standalone |
+| `proconos_mock_server.py` | ProConOS | 20547 | Profiles, detection logging, scan delay | Standalone |
+| `gesrtp_mock_server.py` | GE SRTP | 18245 | Full INIT→REQ state machine, SSTAT/LSTAT/CONFIG_INFO/MEM_READ/MEM_WRITE services, 3 profiles, connection tracking, detection logging, UDP support | Standalone |
+| `ffhse_mock_server.py` | FF HSE | 1089 | SM_IDENTIFY/MA_IDENTIFY/LREQ/LRES/LFIN/FMS_READ handlers, alarm engine, PV drift simulation, 4 profiles, detection logging | Standalone |
+| `redlion_mock_server.py` | Red Lion | 789 | Per-profile device identity + tag database, STX command set (read/write tags, login, config), write tag logging (0x12), scan delay, 4 profiles | Requires root (<1024) |
 
 ### Test Results
 

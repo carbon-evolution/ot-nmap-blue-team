@@ -101,9 +101,22 @@ Start:  python3 ot_mock_servers.py --all-lesser-known
 
 Subprocesses are tracked by PID and receive `SIGTERM` first. If they don't exit within 3 seconds, `SIGKILL` is sent. The list is cleared after all are stopped.
 
+### Honeypot-Grade Features
+
+All 6 lesser-known protocol servers are built to **honeypot-grade** — they emulate complete protocol state machines with realistic behavior for NSE scanning and discovery:
+
+| Feature | GE SRTP | OPC UA | Red Lion | FF HSE | MELSEC-Q | ProConOS |
+|---------|---------|--------|----------|--------|----------|----------|
+| **State machine** | ✅ INIT→REQ→ACK | ✅ HEL→ACK→OPN→MSG→CLO | ✅ STX framing | ✅ LREQ/LRES/LFIN | ✅ MC protocol | ✅ ProConOS |
+| **Multiple profiles** | 3 PLC models | 3 vendor profiles | 4 device models | 4 field devices | 4 CPU types | 4 runtimes |
+| **Detection logging** | ✅ Per-service | ✅ Per-connection | ✅ Per-command | ✅ Per-service | ✅ Per-probe | ✅ Per-probe |
+| **Scan delay** | ✅ 50–200ms | ✅ 10–50ms | ✅ 5–25ms | ✅ 5–15ms | ✅ 10–50ms | ✅ 10–50ms |
+| **Memory/Register access** | ✅ MEM_READ (0x0F) + MEM_WRITE (0x10) | ✅ Browse (525) + Write (634) | ✅ Tag write (0x12) | ✅ FMS_READ | ✅ Random read | — |
+| **Per-profile identity** | Model, firmware, CPU serial | App URI, product URI, endpoints | Model, serial, MAC, part number | Device ID, vendor,DD version | PLC type, series, firmware | Runtime, model, project |
+
 ### Detection Logging
 
-The 6 upgraded standalone servers include structured **blue-team detection logging** — every connection, probe, and operation is timestamped and logged:
+All standalone servers include structured **blue-team detection logging** — every connection, probe, and operation is timestamped and logged:
 
 ```
 2026-07-11 10:06:18 [DETECT] 127.0.0.1:55387 -> CONNECT (profile=rx3i)
@@ -120,19 +133,20 @@ Enable verbose mode with `--verbose` (or `-v`) on standalone servers for full he
 
 The 6 upgraded servers ship with multiple **device profiles** selectable via `--profile`:
 
-| Server | Default Profile | Other Profiles |
-|--------|----------------|----------------|
-| MELSEC-Q | `q03udvcpu` | `q06udvcpu`, `q13udvcpu`, `q26udvcpu` |
-| ProConOS | `adam5510kw` | `adam5510e`, `adam5510m`, `generic` |
-| OPC UA | `siemens_s7` | `rockwell_logix`, `schneider_m340`, `generic` |
-| GE SRTP | `rx3i` | `ge90_30`, `ge90_70` |
-| Red Lion | `g310c2` | `g308c2`, `g312c2`, `dsp1h` |
-| FF HSE | `tic101` | `pic201`, `fic301`, `fse_generic` |
+| Server | Default Profile | Other Profiles | Per-Profile Differences |
+|--------|----------------|----------------|------------------------|
+| MELSEC-Q | `q03udvcpu` | `q06udvcpu`, `q13udvcpu`, `q26udvcpu` | CPU type, series name, firmware version |
+| ProConOS | `adam5510kw` | `adam5510e`, `adam5510m`, `generic` | Runtime version, PLC model, project name |
+| OPC UA | `generic` | `siemens_s7`, `rockwell_logix` | Application URI, product URI, endpoint URLs, address space nodes |
+| GE SRTP | `rx3i` | `ge90_30`, `ge90_70` | PLC model, firmware, CPU type, status info, register memory ranges |
+| Red Lion | `g310c2` | `g307c2`, `g308c2`, `g315c2` | Model name, serial number, MAC address, firmware, **per-profile tag values** (TankLevel, PumpSpeed, Temperature) |
+| FF HSE | `tic101` | `pic201`, `fic301`, `fse_generic` | Device ID, vendor name, device tag, DD version, **per-variable alarm thresholds** |
 
 Each profile changes:
-- Device identity strings (model, vendor, firmware, serial)
+- Device identity strings (model, vendor, firmware, serial, MAC)
 - Simulated process variables (temperatures, pressures, speeds with jitter)
-- Protocol-specific behavior (command support, response timing)
+- Protocol-specific behavior (command support, response timing, register ranges)
+- Tag databases (Red Lion), alarm thresholds (FF HSE), address space (OPC UA)
 
 ### Graceful Degradation
 

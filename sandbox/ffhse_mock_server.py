@@ -77,6 +77,16 @@ FMS_READ_TAG = 0xF1E2       # bytes on wire (LE): 0xE2, 0xF1
 FMS_READ_TYPE = 0x0010
 FMS_READ_RESP_TYPE = 0x8010  # response flag (bit 15 set)
 
+# LRES (Local Response) service — local poll for device status
+LRES_TAG = 0xF1E4
+LRES_TYPE = 0x0004
+LRES_RESP_TYPE = 0x8004
+
+# LFIN (Local Finish) service — session termination
+LFIN_TAG = 0xF1E5
+LFIN_TYPE = 0x0005
+LFIN_RESP_TYPE = 0x8005
+
 # Variable indices
 PV_INDEX      = 0x0001  # Primary Value (process variable)
 SV_INDEX      = 0x0002  # Secondary Value
@@ -234,6 +244,8 @@ _state_lock = threading.Lock()
 _alarm_queue = deque()         # pending alarm events
 _pv_drift = {}                 # current drift offset per profile
 _connection_counter = 0        # global connection counter for tracking
+_active_sessions = {}          # active local sessions: handle -> info dict
+_session_lock = threading.Lock()
 
 
 def _init_pv_drift(profile_name: str):
@@ -626,6 +638,22 @@ def classify_request(data: bytes):
                 "index": index, "length": length,
             }, True)
 
+        # Check LRES (Local Response) — service code 0x0004
+        if tag == LRES_TAG and rtype == LRES_TYPE and len(data) >= 8:
+            session_handle = struct.unpack_from("<I", data, 4)[0]
+            return ("LRES", {
+                "tag": tag, "type": rtype,
+                "session_handle": session_handle,
+            }, True)
+
+        # Check LFIN (Local Finish) — service code 0x0005
+        if tag == LFIN_TAG and rtype == LFIN_TYPE and len(data) >= 8:
+            session_handle = struct.unpack_from("<I", data, 4)[0]
+            return ("LFIN", {
+                "tag": tag, "type": rtype,
+                "session_handle": session_handle,
+            }, True)
+
     # Check MA protocol (starts with 0x90)
     if data[0] == MA_PROTO_DISCRIMINATOR:
         txn_id = 1
@@ -764,6 +792,40 @@ def handle_connection(conn: socket.socket, addr: tuple, tcp_port: int,
                               f"len={length}",
                               buf if verbose else b"")
 
+            elif req_type == "LRES":
+                session_handle = parsed.get("session_handle", 0)
+                pending = _get_pending_alarms()
+                response = build_lres_response(profile, session_handle, pending)
+
+                # Track session in global state
+                with _session_lock:
+                    _active_sessions[session_handle] = {
+                        "created_at": time.time(),
+                        "source": f"{client_ip}:{client_port}",
+                        "alarms_at_poll": len(pending),
+                    }
+
+                log_detection(client_ip, client_port, tcp_port,
+                              "LOCAL_SESSION_RESPONSE",
+                              f"LRES session_handle=0x{session_handle:08X} "
+                              f"alarms={len(pending)} "
+                              f"status=0x{'01' if pending else '00'}",
+                              buf if verbose else b"")
+
+            elif req_type == "LFIN":
+                session_handle = parsed.get("session_handle", 0)
+                response = build_lfin_response(profile, session_handle)
+
+                # Clean up session state
+                with _session_lock:
+                    session_info = _active_sessions.pop(session_handle, None)
+
+                log_detection(client_ip, client_port, tcp_port,
+                              "LOCAL_SESSION_FINISH",
+                              f"LFIN session_handle=0x{session_handle:08X} "
+                              f"{'cleaned up' if session_info else 'no session found'}",
+                              buf if verbose else b"")
+
             else:
                 # Unknown — try SM_Identify as generic fallback
                 log_detection(client_ip, client_port, tcp_port,
@@ -822,6 +884,56 @@ def build_alarm_notification(profile: dict, alarm: dict) -> bytes:
     header = struct.pack("<HHHH", 0xF1E3, 0x9001, sev_code, 0x0000)
     body = atype_enc + struct.pack("<f", alarm["value"])
     return header + body
+
+
+# 8. LRES (Local Response) — device status and alarm summary
+
+def build_lres_response(profile: dict, session_handle: int,
+                        active_alarms: list) -> bytes:
+    """Build an LRES response for a local poll request.
+
+    Returns device status (OK/alarm/fault), active alarm count,
+    and last alarm code. Used by FF HSE clients for session-local
+    health polling.
+
+    Wire format (all LE):
+      tag (uint16):       0xF1E4 (echoed from request)
+      type (uint16):      0x8004 (response)
+      session_handle (uint32): echoed from request
+      status (uint8):     0x00=OK, 0x01=alarm, 0x02=fault
+      num_active (uint16): number of active alarms
+      last_alarm_code (16B ASCII): space-padded alarm identifier
+    """
+    if active_alarms:
+        device_status = 0x01
+        last_alarm = str(active_alarms[-1]["alarm_type"]).ljust(16, " ")[:16].encode("ascii")
+        num_active = min(len(active_alarms), 0xFFFF)
+    else:
+        device_status = 0x00
+        last_alarm = b" " * 16
+        num_active = 0
+
+    header = struct.pack("<HHI", LRES_TAG, LRES_RESP_TYPE, session_handle)
+    body = struct.pack("<BH", device_status, num_active) + last_alarm
+    return header + body
+
+
+# 9. LFIN (Local Finish) — session termination acknowledgment
+
+def build_lfin_response(profile: dict, session_handle: int) -> bytes:
+    """Build an LFIN acknowledgment for session termination.
+
+    Cleanly ends a local session identified by session_handle.
+    The caller should remove any session tracking state.
+
+    Wire format (all LE):
+      tag (uint16):       0xF1E5 (echoed from request)
+      type (uint16):      0x8005 (response)
+      session_handle (uint32): echoed from request
+      ack (uint8):        0x00 (acknowledged)
+    """
+    header = struct.pack("<HHI", LFIN_TAG, LFIN_RESP_TYPE, session_handle)
+    return header + b"\x00"
 
 
 # ─── Server ────────────────────────────────────────────────────────────────

@@ -57,6 +57,10 @@ SVC_GET_ENDPOINTS_REQ = 428
 SVC_GET_ENDPOINTS_RESP = 429
 SVC_READ_REQ = 631
 SVC_READ_RESP = 632
+SVC_BROWSE_REQ = 525
+SVC_BROWSE_RESP = 526
+SVC_WRITE_REQ = 634
+SVC_WRITE_RESP = 635
 
 # Attribute IDs
 ATTR_NODE_CLASS = 1
@@ -276,6 +280,65 @@ def enc_datetime_now():
     return enc_datetime(datetime.now(timezone.utc))
 
 
+# ── Variant/DataValue Parsing ────────────────────────────────────────────────
+
+def parse_variant_value(data, offset):
+    """Parse a Variant at offset, return (value, btype, new_offset)."""
+    if offset >= len(data):
+        return None, BT_NULL, offset
+    enc_byte = data[offset]
+    btype = enc_byte & 0x3F
+    is_array = (enc_byte & 0x40) != 0
+    off = offset + 1
+
+    if is_array or btype == BT_NULL:
+        return None, btype, off
+
+    value = None
+    if btype == BT_BOOLEAN and off < len(data):
+        value = bool(data[off]); off += 1
+    elif btype == BT_INT32 and off + 4 <= len(data):
+        value = struct.unpack_from("<i", data, off)[0]; off += 4
+    elif btype == BT_UINT32 and off + 4 <= len(data):
+        value = struct.unpack_from("<I", data, off)[0]; off += 4
+    elif btype == BT_DOUBLE and off + 8 <= len(data):
+        value = struct.unpack_from("<d", data, off)[0]; off += 8
+    elif btype == BT_STRING and off + 4 <= len(data):
+        slen = struct.unpack_from("<I", data, off)[0]; off += 4
+        if slen != 0xFFFFFFFF and slen > 0 and off + slen <= len(data):
+            value = data[off:off+slen].decode('utf-8', errors='replace'); off += slen
+    elif btype == BT_DATETIME:
+        off += 8
+    elif btype == BT_BYTESTRING and off + 4 <= len(data):
+        blen = struct.unpack_from("<I", data, off)[0]; off += 4
+        if blen != 0xFFFFFFFF and blen > 0:
+            off += blen
+    return value, btype, off
+
+
+def parse_data_value(data, offset):
+    """Parse a DataValue at offset, return (value, btype, new_offset)."""
+    if offset >= len(data):
+        return None, BT_NULL, offset
+    mask = data[offset]
+    off = offset + 1
+    value = None
+    btype = BT_NULL
+    if mask & 0x01:
+        value, btype, off = parse_variant_value(data, off)
+    if mask & 0x02:
+        off += 4  # StatusCode
+    if mask & 0x04:
+        off += 8  # SourceTimestamp
+    if mask & 0x08:
+        off += 8  # ServerTimestamp
+    if mask & 0x10:
+        off += 2  # SourcePicoseconds
+    if mask & 0x20:
+        off += 2  # ServerPicoseconds
+    return value, btype, off
+
+
 # ── Message Body Encoding Helpers ────────────────────────────────────────────
 
 def enc_response_header(req_handle, status=STATUS_GOOD):
@@ -444,6 +507,47 @@ def build_read_response(nodes_to_read, addr_space, req_handle, req_id, seq_num, 
 
     body += enc_array(results, lambda r: r)
     body += i32(-1)  # DiagnosticInfos (null array)
+    return enc_chunk(MSG_MSG, CHUNK_FINAL, bytes(body), channel_id)
+
+
+def build_browse_response(starting_node, profile, addr_space, req_handle, req_id, seq_num, channel_id, token_id):
+    """Browse response with child references for the requested node."""
+    children = _get_browse_children(starting_node, profile, addr_space)
+
+    body = bytearray()
+    body += enc_expanded_node_id(0, SVC_BROWSE_RESP)
+    body += enc_response_header(req_handle)
+
+    # Encode individual reference descriptions
+    ref_enc_list = []
+    for ref_type_id, is_fwd, node_id, bn, dn, nc, td in children:
+        ref = bytearray()
+        ref += enc_node_id(*ref_type_id)
+        ref += u8(1 if is_fwd else 0)
+        ref += enc_expanded_node_id(*node_id)
+        ref += enc_qualified_name(0, bn)
+        ref += enc_localized_text(dn)
+        ref += u32(nc)
+        ref += enc_expanded_node_id(*td)
+        ref_enc_list.append(bytes(ref))
+
+    # Single BrowseResult: StatusCode + ContinuationPoint + References
+    result = bytearray()
+    result += u32(STATUS_GOOD)
+    result += enc_bytearray(None)  # ContinuationPoint (null = no more)
+    result += enc_array(ref_enc_list, lambda r: r)  # References array
+    body += enc_array([bytes(result)], lambda r: r)  # Results array (one BrowseResult)
+    body += i32(-1)  # DiagnosticInfos (null)
+    return enc_chunk(MSG_MSG, CHUNK_FINAL, bytes(body), channel_id)
+
+
+def build_write_response(status_codes, req_handle, channel_id):
+    """Write response with array of status codes."""
+    body = bytearray()
+    body += enc_expanded_node_id(0, SVC_WRITE_RESP)
+    body += enc_response_header(req_handle)
+    body += enc_array(status_codes, lambda sc: u32(sc))
+    body += i32(-1)  # DiagnosticInfos (null)
     return enc_chunk(MSG_MSG, CHUNK_FINAL, bytes(body), channel_id)
 
 
@@ -728,6 +832,47 @@ def parse_service_request(data, offset):
                                 off += dn_len
                     nodes_to_read.append((nid, attr_id))
 
+    elif service_id == SVC_BROWSE_REQ:
+        # ViewDescription: ViewId (NodeId) + Timestamp + ViewVersion
+        _, off = parse_node_id_value(data, off)
+        off += 8  # Timestamp
+        off += 4  # ViewVersion
+        off += 4  # MaxReferencesToReturn
+        # ContinuationPoint (ByteString)
+        if off + 4 <= len(data):
+            cp_len = struct.unpack_from("<I", data, off)[0]; off += 4
+            if cp_len != 0xFFFFFFFF and cp_len > 0:
+                off += cp_len
+        # StartingNode (NodeId) -- the key field for Browse
+        starting_node, off = parse_node_id_value(data, off)
+        if starting_node:
+            nodes_to_read.append(starting_node)
+        off += 4   # BrowseDirection
+        off += 1   # IncludeSubtypes
+        off += 4   # NodeClassMask
+        off += 4   # ResultMask
+
+    elif service_id == SVC_WRITE_REQ:
+        # NodesToWrite array
+        if off + 4 <= len(data):
+            n_nodes = struct.unpack_from("<i", data, off)[0]; off += 4
+            if n_nodes > 0 and n_nodes < 1000:
+                for _ in range(n_nodes):
+                    nid, off = parse_node_id_value(data, off)
+                    if nid is None:
+                        break
+                    if off + 4 > len(data):
+                        break
+                    attr_id = struct.unpack_from("<I", data, off)[0]; off += 4
+                    # IndexRange: String
+                    if off + 4 <= len(data):
+                        ir_len = struct.unpack_from("<I", data, off)[0]; off += 4
+                        if ir_len != 0xFFFFFFFF and ir_len > 0:
+                            off += ir_len
+                    # Value: DataValue
+                    val, btype, off = parse_data_value(data, off)
+                    nodes_to_read.append((nid, attr_id, val, btype))
+
     return service_id, req_handle, nodes_to_read, off
 
 
@@ -815,6 +960,16 @@ def make_address_space(profile):
     # ProductUri
     space[((0, 2262, 'numeric'), ATTR_VALUE)] = (profile['prod_uri'], BT_STRING)
 
+    # Standard address space hierarchy nodes (for Browse)
+    space[((0, 84, 'numeric'), ATTR_DISPLAY_NAME)] = ("Root", BT_LOCALIZED_TEXT)
+    space[((0, 84, 'numeric'), ATTR_NODE_CLASS)] = (1, BT_UINT32)
+    space[((0, 85, 'numeric'), ATTR_DISPLAY_NAME)] = ("Objects", BT_LOCALIZED_TEXT)
+    space[((0, 85, 'numeric'), ATTR_NODE_CLASS)] = (1, BT_UINT32)
+    space[((0, 86, 'numeric'), ATTR_DISPLAY_NAME)] = ("Types", BT_LOCALIZED_TEXT)
+    space[((0, 86, 'numeric'), ATTR_NODE_CLASS)] = (1, BT_UINT32)
+    space[((0, 87, 'numeric'), ATTR_DISPLAY_NAME)] = ("Views", BT_LOCALIZED_TEXT)
+    space[((0, 87, 'numeric'), ATTR_NODE_CLASS)] = (1, BT_UINT32)
+
     # Vendor-specific namespace (ns=2) — device info
     space[((2, 'DeviceName', 'string'), ATTR_VALUE)] = (profile['device_name'], BT_STRING)
     space[((2, 'DeviceName', 'string'), ATTR_DISPLAY_NAME)] = ("DeviceName", BT_LOCALIZED_TEXT)
@@ -826,6 +981,47 @@ def make_address_space(profile):
     space[((2, 'SerialNumber', 'string'), ATTR_DISPLAY_NAME)] = ("SerialNumber", BT_LOCALIZED_TEXT)
 
     return space
+
+
+# ── Browse Address Space Hierarchy ───────────────────────────────────────────
+
+def _get_browse_children(starting_node, profile, addr_space):
+    """Get child references for a given starting node.
+
+    Returns list of (ref_type_id, is_forward, node_id, browse_name,
+                     display_name, node_class, type_def) tuples.
+    """
+    ORG = (0, 35, 'numeric')          # Organizes reference type
+    FOLDER_T = (0, 61, 'numeric')     # FolderType
+    OBJ_T = (0, 58, 'numeric')        # BaseObjectType
+    VAR_T = (0, 63, 'numeric')        # BaseDataVariableType
+
+    CACHE = {
+        (0, 84, 'numeric'): [  # RootFolder
+            (ORG, True, (0, 85, 'numeric'), "Objects", "Objects", 1, FOLDER_T),
+            (ORG, True, (0, 86, 'numeric'), "Types", "Types", 1, FOLDER_T),
+            (ORG, True, (0, 87, 'numeric'), "Views", "Views", 1, FOLDER_T),
+        ],
+        (0, 85, 'numeric'): [  # Objects
+            (ORG, True, (0, 2253, 'numeric'), "Server", "Server", 1, OBJ_T),
+            (ORG, True, (2, 'DeviceName', 'string'), "DeviceName", "DeviceName", 2, VAR_T),
+            (ORG, True, (2, 'Manufacturer', 'string'), "Manufacturer", "Manufacturer", 2, VAR_T),
+            (ORG, True, (2, 'SerialNumber', 'string'), "SerialNumber", "SerialNumber", 2, VAR_T),
+        ],
+        (0, 2253, 'numeric'): [  # Server
+            (ORG, True, (0, 2256, 'numeric'), "ServerState", "Server State", 2, VAR_T),
+            (ORG, True, (0, 2267, 'numeric'), "CurrentTime", "Current Time", 2, VAR_T),
+            (ORG, True, (0, 2268, 'numeric'), "StartTime", "Start Time", 2, VAR_T),
+            (ORG, True, (0, 2266, 'numeric'), "ManufacturerName", "Manufacturer Name", 2, VAR_T),
+            (ORG, True, (0, 2261, 'numeric'), "ProductName", "Product Name", 2, VAR_T),
+            (ORG, True, (0, 2262, 'numeric'), "ProductUri", "Product URI", 2, VAR_T),
+        ],
+        (0, 86, 'numeric'): [  # Types
+            (ORG, True, (0, 88, 'numeric'), "ObjectTypes", "Object Types", 1, FOLDER_T),
+            (ORG, True, (0, 89, 'numeric'), "VariableTypes", "Variable Types", 1, FOLDER_T),
+        ],
+    }
+    return CACHE.get(starting_node, [])
 
 
 # ── Client Handler ───────────────────────────────────────────────────────────
@@ -1031,6 +1227,46 @@ def handle_client(client_sock, addr, profile_name, num_endpoints, session_timeou
                         detect_log.message(remote, "READ_RESP",
                             f"nodes={len(nodes_to_read)}")
 
+                    elif service_id == SVC_BROWSE_REQ:
+                        starting_node = nodes_to_read[0] if nodes_to_read else None
+                        if starting_node:
+                            resp = build_browse_response(
+                                starting_node, profile, addr_space, req_handle,
+                                pkt_req_id, seq_num, channel_id, pkt_token_id)
+                            seq_num += 1
+                            print(hex_dump(resp, label=f"SEND Browse RESP to {remote}"))
+                            client_sock.sendall(resp)
+                            detect_log.message(remote, "BROWSE_RESP",
+                                f"node={starting_node}")
+                        else:
+                            detect_log.error(remote, "Browse with no starting node")
+                            body = bytearray()
+                            body += enc_expanded_node_id(0, SVC_BROWSE_RESP)
+                            body += enc_response_header(req_handle, STATUS_GOOD)
+                            body += i32(0)  # empty results
+                            body += i32(-1)  # null DiagnosticInfos
+                            resp = enc_chunk(MSG_MSG, CHUNK_FINAL, bytes(body), channel_id)
+                            try:
+                                client_sock.sendall(resp)
+                            except OSError:
+                                pass
+
+                    elif service_id == SVC_WRITE_REQ:
+                        num_writes = len(nodes_to_read)
+                        for entry in nodes_to_read:
+                            if len(entry) >= 2:
+                                nid_w = entry[0]; attr_w = entry[1]
+                                val_w = entry[2] if len(entry) >= 3 else None
+                                detect_log.event(remote, "WRITE",
+                                    f"node={nid_w} attr={attr_w} value={val_w}")
+                        status_codes = [STATUS_GOOD] * num_writes if num_writes else [STATUS_GOOD]
+                        resp = build_write_response(status_codes, req_handle, channel_id)
+                        seq_num += 1
+                        print(hex_dump(resp, label=f"SEND Write RESP to {remote}"))
+                        client_sock.sendall(resp)
+                        detect_log.message(remote, "WRITE_RESP",
+                            f"nodes={num_writes}")
+
                     else:
                         # Unknown service — respond with generic OK or error
                         # Build a minimal empty response for unknown service
@@ -1137,7 +1373,7 @@ def main():
 ║  Started:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S'):<25}║
 ║                                                              ║
 ║  Profiles supported: generic, siemens_s7, rockwell_logix     ║
-║  Services: FindServers, GetEndpoints, Read                   ║
+║  Services: FindServers, GetEndpoints, Read, Browse, Write    ║
 ║                                                              ║
 ║  Press Ctrl+C to stop                                        ║
 ╚══════════════════════════════════════════════════════════════╝

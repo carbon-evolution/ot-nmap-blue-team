@@ -111,6 +111,109 @@ SRTP_ERROR_NAMES = {
     ERR_ACCESS_DENIED: "AccessDenied",
 }
 
+# Memory access service codes (register read/write)
+SERVICE_MEM_READ = 15
+SERVICE_MEM_WRITE = 16
+
+# GE SRTP memory type codes (for register/memory access)
+MEM_TYPE_R = 0x01   # %R  - internal holding registers (16-bit)
+MEM_TYPE_AI = 0x02  # %AI - analog input registers (16-bit)
+MEM_TYPE_AQ = 0x03  # %AQ - analog output registers (16-bit)
+
+MEM_TYPE_NAMES = {
+    MEM_TYPE_R:  "%R",
+    MEM_TYPE_AI: "%AI",
+    MEM_TYPE_AQ: "%AQ",
+}
+
+# Per-profile memory register ranges (max element index + 1)
+MEMORY_RANGES = {
+    "rx3i": {
+        MEM_TYPE_R:  65536,   # %R:  0-65535  (64K)
+        MEM_TYPE_AI: 4096,    # %AI: 0-4095
+        MEM_TYPE_AQ: 4096,    # %AQ: 0-4095
+    },
+    "ge90_70": {
+        MEM_TYPE_R:  65536,
+        MEM_TYPE_AI: 4096,
+        MEM_TYPE_AQ: 4096,
+    },
+    "ge90_30": {
+        MEM_TYPE_R:  4096,
+        MEM_TYPE_AI: 1024,
+        MEM_TYPE_AQ: 1024,
+    },
+}
+
+# Realistic register value patterns per memory type.
+# Values cycle based on offset % len(pattern) so every offset returns a
+# deterministic but plausible value without maintaining mutable state.
+_MEMORY_VALUE_PATTERNS = {
+    MEM_TYPE_R: (
+        0, 1, 0, 100, 5000, 12345, 65535, 0,
+        250, 1, 0, 0, 32768, 1, 0, 42,
+    ),
+    MEM_TYPE_AI: (
+        27648, 13824, 0, 27648, 4147, 18723, 25000, 0,
+        5529, 31000, 5000, 27648, 0, 13824, 20000, 10000,
+    ),
+    MEM_TYPE_AQ: (
+        0, 13824, 27648, 5000, 10000, 0, 20000, 7500,
+    ),
+}
+
+
+# ======================================================================
+# Memory Access Helpers
+# ======================================================================
+
+def _generate_register_value(mem_type: int, offset: int) -> int:
+    """Generate a deterministic, realistic 16-bit register value.
+
+    Args:
+        mem_type: GE SRTP memory type code (MEM_TYPE_R, _AI, _AQ).
+        offset:   Zero-based element index.
+
+    Returns:
+        A 16-bit unsigned integer (0-65535) appropriate for the memory
+        region — control values for %%R, analog-scale for %%AI/%%AQ.
+    """
+    pattern = _MEMORY_VALUE_PATTERNS.get(mem_type)
+    if pattern:
+        return pattern[offset % len(pattern)]
+    return 0
+
+
+def _validate_memory_access(mem_type: int, offset: int, count: int,
+                            profile: str) -> str | None:
+    """Validate a memory access request against profile register limits.
+
+    Args:
+        mem_type:  GE SRTP memory type code.
+        offset:    Starting element index.
+        count:     Number of elements to read or write.
+        profile:   PLC profile key from PLC_PROFILES.
+
+    Returns:
+        None if valid, or an error description string if the access
+        is outside the valid range for this profile and memory type.
+    """
+    ranges = MEMORY_RANGES.get(profile, {})
+    max_range = ranges.get(mem_type)
+    if max_range is None:
+        return (f"unknown memory type 0x{mem_type:02x} "
+                f"for profile '{profile}'")
+    if offset >= max_range:
+        return (f"offset {offset} exceeds max index {max_range - 1} "
+                f"for mem_type 0x{mem_type:02x}")
+    if count == 0:
+        return "zero-length access not allowed"
+    if offset + count > max_range:
+        return (f"range [{offset}:{offset + count - 1}] exceeds "
+                f"max index {max_range - 1} "
+                f"for mem_type 0x{mem_type:02x}")
+    return None
+
 
 # ======================================================================
 # PLC Device Profiles
@@ -463,6 +566,55 @@ def build_error_response(error_code: int, pkt_index: int = 0x0002) -> bytes:
     return build_srtp_packet(PKT_REQ_ACK, pkt_index, data)
 
 
+def build_mem_read_response(
+    mem_type: int, start_offset: int, count: int,
+    profile: str, status: int = 0x0000,
+) -> bytes:
+    """Build a MEM_READ REQ_ACK response with register values.
+
+    Data layout (50 bytes max):
+        Bytes 0-1:   Status code (uint16 BE)    0x0000 = success
+        Bytes 2+:    Register values             each uint16 LE
+                    (max 24 values per response; excess truncated)
+
+    Args:
+        mem_type:      GE SRTP memory type code (%%R, %%AI, %%AQ).
+        start_offset:  Starting register index.
+        count:         Number of register values to return.
+        profile:       PLC profile key for value generation.
+        status:        Response status code (default: success).
+
+    Returns:
+        56-byte REQ_ACK packet with register data payload.
+    """
+    data = struct.pack(">H", status & 0xFFFF)
+    for i in range(min(count, 24)):
+        value = _generate_register_value(mem_type, start_offset + i)
+        data += struct.pack("<H", value & 0xFFFF)
+    data = data.ljust(SRTP_DATA_LEN, b"\x00")[:SRTP_DATA_LEN]
+    return build_srtp_packet(PKT_REQ_ACK, 0x0002, data)
+
+
+def build_mem_write_ack(count: int, status: int = 0x0000) -> bytes:
+    """Build a MEM_WRITE REQ_ACK acknowledgement.
+
+    Data layout (50 bytes):
+        Bytes 0-1:   Status code (uint16 BE)    0x0000 = success
+        Bytes 2-3:   Count of elements written   (uint16 BE, echo)
+        Remainder:   Zero padding
+
+    Args:
+        count:  Number of elements written (echoed back).
+        status: Response status code (default: success).
+
+    Returns:
+        56-byte REQ_ACK packet acknowledging the write.
+    """
+    data = struct.pack(">HH", status & 0xFFFF, count & 0xFFFF)
+    data = data.ljust(SRTP_DATA_LEN, b"\x00")[:SRTP_DATA_LEN]
+    return build_srtp_packet(PKT_REQ_ACK, 0x0002, data)
+
+
 # ======================================================================
 # SRTP Packet Parser
 # ======================================================================
@@ -578,6 +730,8 @@ SERVICE_NAMES = {
     SERVICE_PLC_SSTAT: "PLC_SSTAT",
     SERVICE_PLC_LSTAT: "PLC_LSTAT",
     SERVICE_RET_CONFIG_INFO: "RET_CONFIG_INFO",
+    SERVICE_MEM_READ: "MEM_READ",
+    SERVICE_MEM_WRITE: "MEM_WRITE",
 }
 
 
@@ -776,6 +930,118 @@ def handle_client(conn, addr, profile: str, scan_delay_ms: int,
                 )
                 print(f"  [{addr_str}] -> REQ_ACK: RET_CONFIG_INFO "
                       f"(cpu={prof['cpu']})")
+                if verbose:
+                    print(hex_dump(response, label="  [Hex TX]"))
+                conn.sendall(response)
+                state["packets_sent"] += 1
+
+            elif service_code == SERVICE_MEM_READ:
+                # Parse memory read: mem_type(1) + offset(2) + count(2)
+                if data_length < 9:
+                    print(f"  [!] {addr_str}: MEM_READ payload too short "
+                          f"({data_length}, need >= 9)")
+                    response = build_error_response(ERR_INVALID_DATA, pkt_index)
+                    conn.sendall(response)
+                    state["packets_sent"] += 1
+                    break
+
+                mem_type = payload[4]
+                mem_offset = struct.unpack(">H", payload[5:7])[0]
+                mem_count = struct.unpack(">H", payload[7:9])[0]
+                type_name = MEM_TYPE_NAMES.get(mem_type, f"0x{mem_type:02x}")
+
+                # Validate against profile register limits
+                error_msg = _validate_memory_access(
+                    mem_type, mem_offset, mem_count, profile
+                )
+                if error_msg:
+                    print(f"  [!] {addr_str}: MEM_READ rejected: {error_msg}")
+                    _detection_log.info(
+                        "%s -> MEM_READ %s[%d] x%d (REJECTED: %s)",
+                        addr_str, type_name, mem_offset, mem_count,
+                        error_msg,
+                    )
+                    response = build_mem_read_response(
+                        mem_type, mem_offset, mem_count, profile,
+                        status=ERR_INVALID_DATA,
+                    )
+                    conn.sendall(response)
+                    state["packets_sent"] += 1
+                    continue
+
+                # Log successful read probe
+                _detection_log.info(
+                    "%s -> MEM_READ %s[%d] x%d",
+                    addr_str, type_name, mem_offset, mem_count,
+                )
+                print(f"  [{addr_str}] -> REQ_ACK: MEM_READ "
+                      f"{type_name}[{mem_offset}] x{mem_count}")
+                if verbose:
+                    print(f"  [{addr_str}]   Values: ", end="")
+                response = build_mem_read_response(
+                    mem_type, mem_offset, mem_count, profile,
+                )
+                if verbose:
+                    _, _, _, rdata = parse_srtp_packet(response)
+                    val_count = min(mem_count, (50 - 2) // 2)
+                    vals = [struct.unpack("<H", rdata[2 + i * 2:4 + i * 2])[0]
+                            for i in range(val_count)]
+                    print(f"  [{addr_str}]   %s", vals)
+                    print(hex_dump(response, label="  [Hex TX]"))
+                conn.sendall(response)
+                state["packets_sent"] += 1
+
+            elif service_code == SERVICE_MEM_WRITE:
+                # Parse memory write: mem_type(1) + offset(2) + count(2) + data
+                if data_length < 9:
+                    print(f"  [!] {addr_str}: MEM_WRITE payload too short "
+                          f"({data_length}, need >= 9)")
+                    response = build_error_response(ERR_INVALID_DATA, pkt_index)
+                    conn.sendall(response)
+                    state["packets_sent"] += 1
+                    break
+
+                mem_type = payload[4]
+                mem_offset = struct.unpack(">H", payload[5:7])[0]
+                mem_count = struct.unpack(">H", payload[7:9])[0]
+                type_name = MEM_TYPE_NAMES.get(mem_type, f"0x{mem_type:02x}")
+
+                expected_write_bytes = mem_count * 2
+                actual_write_bytes = max(0, data_length - 9)
+
+                # Validate against profile register limits
+                error_msg = _validate_memory_access(
+                    mem_type, mem_offset, mem_count, profile
+                )
+                if error_msg:
+                    print(f"  [!] {addr_str}: MEM_WRITE rejected: {error_msg}")
+                    _detection_log.info(
+                        "%s -> MEM_WRITE %s[%d] x%d (REJECTED: %s)",
+                        addr_str, type_name, mem_offset, mem_count,
+                        error_msg,
+                    )
+                    response = build_mem_write_ack(
+                        mem_count, status=ERR_INVALID_DATA,
+                    )
+                    conn.sendall(response)
+                    state["packets_sent"] += 1
+                    continue
+
+                # Log write attempt as a detection event
+                _detection_log.info(
+                    "%s -> MEM_WRITE %s[%d] x%d "
+                    "(wrote %d/%d bytes)",
+                    addr_str, type_name, mem_offset, mem_count,
+                    actual_write_bytes, expected_write_bytes,
+                )
+                print(f"  [{addr_str}] -> REQ_ACK: MEM_WRITE "
+                      f"{type_name}[{mem_offset}] x{mem_count} "
+                      f"({actual_write_bytes}/{expected_write_bytes}B)")
+                if verbose:
+                    preview = payload[9:9 + min(8, actual_write_bytes)]
+                    print(f"  [{addr_str}]   Write data "
+                          f"(first {len(preview)}B): {preview.hex()}")
+                response = build_mem_write_ack(mem_count)
                 if verbose:
                     print(hex_dump(response, label="  [Hex TX]"))
                 conn.sendall(response)
@@ -1027,6 +1293,83 @@ def self_test():
     assert state["init_state"] == "completed"
     remove_connection_state(("192.0.2.1", 49152))
     print(f"  [PASS] Connection state tracking: create/update/remove")
+
+    # Test 14: MEM_READ response for %R registers (rx3i profile)
+    mem_rsp = build_mem_read_response(MEM_TYPE_R, 0, 4, "rx3i")
+    assert len(mem_rsp) == SRTP_PACKET_LEN
+    _, _, _, mp = parse_srtp_packet(mem_rsp)
+    mr_status = struct.unpack(">H", mp[:2])[0]
+    assert mr_status == ERR_SUCCESS, (
+        f"MEM_READ status: expected 0x{ERR_SUCCESS:04x}, "
+        f"got 0x{mr_status:04x}"
+    )
+    # First register value at offset 0 (LE)
+    mr_val0 = struct.unpack("<H", mp[2:4])[0]
+    assert mr_val0 == 0, f"MEM_READ %R[0]: expected 0, got {mr_val0}"
+    mr_val1 = struct.unpack("<H", mp[4:6])[0]
+    assert mr_val1 == 1, f"MEM_READ %R[1]: expected 1, got {mr_val1}"
+    print(f"  [PASS] MEM_READ %%R[0..3] rx3i: "
+          f"[{mr_val0}, {mr_val1}, "
+          f"{struct.unpack('<H', mp[6:8])[0]}, "
+          f"{struct.unpack('<H', mp[8:10])[0]}]")
+
+    # Test 15: MEM_READ response for %AI registers
+    mem_ai = build_mem_read_response(MEM_TYPE_AI, 0, 2, "rx3i")
+    _, _, _, aip = parse_srtp_packet(mem_ai)
+    ai_val0 = struct.unpack("<H", aip[2:4])[0]
+    assert ai_val0 == 27648, f"MEM_READ %%AI[0]: expected 27648, got {ai_val0}"
+    print(f"  [PASS] MEM_READ %%AI[0..1] rx3i: "
+          f"[{ai_val0}, {struct.unpack('<H', aip[4:6])[0]}]")
+
+    # Test 16: MEM_WRITE acknowledgement
+    mem_wack = build_mem_write_ack(4)
+    _, _, _, wp = parse_srtp_packet(mem_wack)
+    w_status = struct.unpack(">H", wp[:2])[0]
+    w_count = struct.unpack(">H", wp[2:4])[0]
+    assert w_status == ERR_SUCCESS
+    assert w_count == 4, f"MEM_WRITE count echo: expected 4, got {w_count}"
+    print(f"  [PASS] MEM_WRITE ack: status=0x{w_status:04x} count={w_count}")
+
+    # Test 17: MEM_READ response with error status
+    mem_err = build_mem_read_response(
+        MEM_TYPE_R, 0, 1, "rx3i", status=ERR_INVALID_DATA,
+    )
+    _, _, _, ep = parse_srtp_packet(mem_err)
+    e_status = struct.unpack(">H", ep[:2])[0]
+    assert e_status == ERR_INVALID_DATA, (
+        f"MEM_READ error: expected 0x{ERR_INVALID_DATA:04x}, "
+        f"got 0x{e_status:04x}"
+    )
+    print(f"  [PASS] MEM_READ error status: 0x{e_status:04x}")
+
+    # Test 18: _validate_memory_access rejects bad memory type
+    err1 = _validate_memory_access(0xFF, 0, 1, "rx3i")
+    assert err1 is not None, "Expected rejection for unknown mem_type"
+    print(f"  [PASS] _validate_memory_access unknown mem_type: '{err1}'")
+
+    # Test 19: _validate_memory_access rejects out-of-range offset
+    err2 = _validate_memory_access(MEM_TYPE_R, 999999, 1, "rx3i")
+    assert err2 is not None, "Expected rejection for OOB offset"
+    print(f"  [PASS] _validate_memory_access OOB offset: '{err2}'")
+
+    # Test 20: _validate_memory_access passes valid access
+    err3 = _validate_memory_access(MEM_TYPE_R, 0, 10, "rx3i")
+    assert err3 is None, f"Expected valid, got: '{err3}'"
+    err4 = _validate_memory_access(MEM_TYPE_AI, 0, 5, "ge90_30")
+    assert err4 is None, f"Expected valid for 90-30 AI, got: '{err4}'"
+    print(f"  [PASS] _validate_memory_access valid accesses accepted")
+
+    # Test 21: _generate_register_value deterministic and realistic
+    val_r_0 = _generate_register_value(MEM_TYPE_R, 0)
+    val_r_16 = _generate_register_value(MEM_TYPE_R, 16)
+    assert val_r_0 == 0, f"%%R[0]: expected 0, got {val_r_0}"
+    assert val_r_0 == val_r_16, (
+        f"%%R[0] ({val_r_0}) != %%R[16] ({val_r_16}) - not cycling?"
+    )
+    val_ai = _generate_register_value(MEM_TYPE_AI, 0)
+    assert 0 <= val_ai <= 65535, f"%%AI[0] OOB: {val_ai}"
+    print(f"  [PASS] _generate_register_value deterministic, "
+          f"%%R[0]=%R[16]={val_r_0}, %%AI[0]={val_ai}")
 
     print(f"\n[SELF-TEST] All tests passed.")
 
