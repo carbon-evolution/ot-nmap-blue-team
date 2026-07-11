@@ -259,18 +259,20 @@ nmap             # For running the NSE scripts
 cd sandbox/
 
 # Start all 6 honeypot-grade servers
+# NOTE: Red Lion listens on TCP 789 (a privileged port), so its server
+# must be started with sudo. The NSE portrule is pinned to 789.
 python3 melsecq_mock_server.py --port 5007 &
 python3 opcua_mock_server.py --port 4840 --profile siemens_s7 &
 python3 gesrtp_mock_server.py --port 18245 --profile rx3i &
-python3 redlion_mock_server.py --port 44818 --profile g310c2 &
-python3 ffhse_mock_server.py --port 1089 --profile tic101 &
+sudo python3 redlion_mock_server.py --port 789 --model G310C2 &
+python3 ffhse_mock_server.py --port 1089 --profile flow &
 python3 proconos_mock_server.py --port 20547 &
 
 # In another terminal, run NSE tests against all 6
 nmap -p 5007 --script ../improved-scripts/lesser-known/melsecq-info-improved.nse 127.0.0.1
 nmap -p 4840 --script ../improved-scripts/lesser-known/opcua-discovery-improved.nse 127.0.0.1
 nmap -p 18245 --script ../improved-scripts/lesser-known/gesrtp-info-improved.nse 127.0.0.1
-nmap -p 44818 --script ../improved-scripts/lesser-known/redlion-cr3-info-improved.nse 127.0.0.1
+nmap -p 789 --script ../improved-scripts/lesser-known/redlion-cr3-info-improved.nse 127.0.0.1
 nmap -p 1089 --script ../improved-scripts/lesser-known/ff-hse-discover-improved.nse 127.0.0.1
 nmap -p 20547 --script ../improved-scripts/lesser-known/proconos-info-improved.nse 127.0.0.1
 

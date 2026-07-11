@@ -251,8 +251,13 @@ local function parse_sm_identify_response(data)
 
   for _, field_name in ipairs(fields) do
     if pos and pos <= #data then
-      local val
-      pos, val = string.unpack("z", data, pos)
+      -- string.unpack("z", ...) throws if the remaining bytes contain no
+      -- null terminator (common for the final field), so guard with pcall.
+      local ok, newpos, val = pcall(string.unpack, "z", data, pos)
+      if not ok then
+        break
+      end
+      pos = newpos
       if val and #val > 0 then
         info[field_name] = val
       end
@@ -290,8 +295,13 @@ local function parse_ma_response(data)
 
   for _, field_name in ipairs(fields) do
     if pos and pos <= #data then
-      local val
-      pos, val = string.unpack("z", data, pos)
+      -- string.unpack("z", ...) throws if the remaining bytes contain no
+      -- null terminator (common for the final field), so guard with pcall.
+      local ok, newpos, val = pcall(string.unpack, "z", data, pos)
+      if not ok then
+        break
+      end
+      pos = newpos
       if val and #val > 0 then
         info[field_name] = val
       end
