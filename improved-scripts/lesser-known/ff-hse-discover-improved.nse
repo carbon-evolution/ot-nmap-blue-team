@@ -311,6 +311,38 @@ local function parse_ma_response(data)
   return info
 end
 
+-- Map raw FF HSE banner labels to canonical output field names.
+local BANNER_LABEL_MAP = {
+  ["ff_hse device"]     = "Device Name",
+  ["device id"]         = "Device Name",
+  ["vendor"]            = "Vendor",
+  ["vendor name"]       = "Vendor",
+  ["device tag"]        = "Device Tag",
+  ["device type"]       = "Device Type",
+  ["hse version"]       = "HSE Version",
+  ["software rev"]      = "Software Revision",
+  ["software revision"] = "Software Revision",
+  ["stack"]             = "Stack",
+  ["mac"]               = "MAC",
+}
+
+--- Parse "Label: Value" lines out of an ASCII banner into named fields.
+-- @param data string: raw banner bytes
+-- @return table: canonical field name -> value (may be empty)
+local function parse_banner_labeled_fields(data)
+  local info = {}
+  for line in (data .. "\n"):gmatch("([^\r\n]+)") do
+    local label, value = line:match("^%s*([%w_ ]+):%s*(.-)%s*$")
+    if label and value and value ~= "" then
+      local canon = BANNER_LABEL_MAP[label:lower():gsub("%s+$", "")]
+      if canon then
+        info[canon] = value
+      end
+    end
+  end
+  return info
+end
+
 --- Generate a summary of extracted device information for structured output.
 -- @param info table: key-value pairs of device info
 -- @return string: formatted summary or nil
@@ -426,12 +458,16 @@ action = function(host, port)
       stdnse.debug1("Found HSE-related strings: %s", table.concat(hse_strings, ", "))
     end
 
-    -- Parse structured device info
-    local device_info
-    if port_num == HSE_MA_PORT then
-      device_info = parse_ma_response(banner_data)
-    else
-      device_info = parse_sm_identify_response(banner_data)
+    -- Prefer named fields parsed from the labeled ASCII banner.
+    local device_info = parse_banner_labeled_fields(banner_data)
+
+    -- If the banner was not labeled text, fall back to binary structured parse.
+    if not next(device_info) then
+      if port_num == HSE_MA_PORT then
+        device_info = parse_ma_response(banner_data)
+      else
+        device_info = parse_sm_identify_response(banner_data)
+      end
     end
 
     if device_info and next(device_info) then
@@ -441,8 +477,6 @@ action = function(host, port)
         stdnse.debug1("Device info: %s", summary)
       end
     elseif #hse_strings > 0 then
-      -- Fall back to raw strings as device info if structured parse failed
-      -- but we found HSE-relevant text
       local fallback_info = {}
       for i, s in ipairs(hse_strings) do
         fallback_info["field_" .. i] = s
