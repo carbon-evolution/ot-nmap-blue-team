@@ -337,6 +337,23 @@ Tests marked `privileged` bind a port below 1024 or require a UDP scan (`nmap -s
 
 ---
 
+## 📋 Asset Inventory Pipeline
+
+The [`asset-inventory/`](asset-inventory/) package (`assetinv`) turns raw scan results from these 16 scripts into a normalized, CVE-annotated **asset inventory** — JSON or CSV. It parses nmap's `-oX` XML, maps each script's fields into a canonical device schema, and (optionally) correlates against an offline curated ICS-CVE bundle. Standard library only.
+
+```bash
+# Parse a captured nmap XML into a CVE-annotated inventory
+python3 -m assetinv parse scan.xml --cve
+
+# Or run a live scan end-to-end
+python3 -m assetinv scan 10.0.0.5 --ports 44818 \
+    --script improved-scripts/enip-identity-improved.nse --cve --format csv -o inventory.csv
+```
+
+CVE hints are **non-authoritative** ("verify against vendor/CISA advisories") and sourced from a bundled, editable JSON file. See the [asset-inventory README](asset-inventory/README.md) for the schema, the bundle format, and how to update it. This is Phase 3 of the project.
+
+---
+
 ## 🧭 Methodology & Safety
 
 ### Threat Level Classification
