@@ -38,3 +38,7 @@ jobs:
       - name: Run privileged tests (root, port < 1024)
         working-directory: sandbox/tests
         run: sudo -E env "PATH=$PATH" python3 -m pytest -m privileged -v
+
+      - name: Run asset-inventory pipeline tests
+        working-directory: asset-inventory
+        run: python3 -m pytest -v
