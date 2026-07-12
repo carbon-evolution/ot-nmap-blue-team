@@ -1,0 +1,34 @@
+[
+  {
+    "vendor": "Rockwell",
+    "product_match": "1756-L6",
+    "firmware_match": null,
+    "cves": [
+      {
+        "id": "CVE-2021-22681",
+        "severity": "critical",
+        "summary": "Studio 5000 Logix Designer uses a hardcoded cryptographic key; an unauthenticated remote attacker can bypass verification and connect to Logix controllers (incl. ControlLogix 1756).",
+        "source": "CISA ICSA-21-056-03"
+      },
+      {
+        "id": "CVE-2022-1161",
+        "severity": "critical",
+        "summary": "Logix controllers store the user-facing textual program separately from executed logic, letting an attacker modify running logic while the original code is still displayed.",
+        "source": "CISA ICSA-22-090-05"
+      }
+    ]
+  },
+  {
+    "vendor": "Siemens",
+    "product_match": "6ES7 515",
+    "firmware_match": null,
+    "cves": [
+      {
+        "id": "CVE-2020-15782",
+        "severity": "high",
+        "summary": "SIMATIC S7-1200/S7-1500 CPUs have a memory-protection bypass allowing an unauthenticated remote attacker to read/write protected memory or execute code.",
+        "source": "CISA ICSA-21-159-04"
+      }
+    ]
+  }
+]
