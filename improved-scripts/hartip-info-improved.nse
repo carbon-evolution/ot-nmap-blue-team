@@ -153,7 +153,7 @@ action = function(host,port)
   socket = nmap.new_socket()
 
   -- resolve script arg timeout (in ms), fall back to stdnse.get_timeout which handles --host-timeout
-  local timeout = nmap.get_script_args("hartip-info.timeout")
+  local timeout = stdnse.get_script_args("hartip-info.timeout")
   if timeout then
     timeout = tonumber(timeout)
   end
