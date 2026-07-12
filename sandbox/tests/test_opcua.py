@@ -21,8 +21,7 @@ def test_opcua_profiles_differ(mock_server):
     m.stop()
     mock_server("opcua_mock_server.py", 4840, "--profile", "rockwell_logix")
     b, _ = nmap_scan(4840, SCRIPT)
-    # KNOWN LIMITATION (genuine fidelity fail, left intact): the OPC UA ACK the
-    # mock returns is identical for every profile (build_ack() ignores the
-    # profile), and the script only reads the ACK, so no field can distinguish
-    # siemens_s7 from rockwell_logix over this handshake alone.
+    # Each profile advertises a distinct ACK receive-buffer size (build_ack()
+    # reads it from the profile), so the handshake alone distinguishes
+    # siemens_s7 from rockwell_logix.
     assert a.get("receive_buffer_size") != b.get("receive_buffer_size"), (a, b)

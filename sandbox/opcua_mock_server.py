@@ -101,6 +101,11 @@ PROFILES = {
         'device_name': 'OPC UA Server',
         'serial': '00000000',
         'discovery_urls': ['opc.tcp://localhost:4840'],
+        # ACK transport parameters advertised in the HEL/ACK handshake.
+        # Real servers legitimately advertise different buffer sizes, so the
+        # handshake alone can help fingerprint a device family.
+        'recv_buf': 65535,
+        'send_buf': 65535,
     },
     'siemens_s7': {
         'name': 'SIMATIC S7-1500 OPC UA Server',
@@ -110,6 +115,8 @@ PROFILES = {
         'device_name': 'SIMATIC S7-1500',
         'serial': 'S7-OPC-2024-001',
         'discovery_urls': ['opc.tcp://192.168.1.10:4840'],
+        'recv_buf': 2097152,
+        'send_buf': 2097152,
     },
     'rockwell_logix': {
         'name': 'ControlLogix 5580 OPC UA Server',
@@ -119,6 +126,8 @@ PROFILES = {
         'device_name': 'ControlLogix 5580',
         'serial': 'CLX-OPC-2024-002',
         'discovery_urls': ['opc.tcp://192.168.1.20:4840'],
+        'recv_buf': 524288,
+        'send_buf': 524288,
     },
 }
 
@@ -378,13 +387,19 @@ def enc_seq_header(seq_num, req_id):
 
 # ── Message Handlers ─────────────────────────────────────────────────────────
 
-def build_ack():
-    """Build ACK message (fixed 28 bytes, no chunk framing)."""
+def build_ack(profile=None):
+    """Build ACK message (fixed 28 bytes, no chunk framing).
+
+    Buffer sizes are taken from the active profile so distinct device
+    families advertise distinct transport parameters in the handshake.
+    """
+    recv_buf = profile.get('recv_buf', DEF_RECV_BUF) if profile else DEF_RECV_BUF
+    send_buf = profile.get('send_buf', DEF_SEND_BUF) if profile else DEF_SEND_BUF
     msg = MSG_ACK + b'\x00'
     msg += u32(28)
     msg += u32(DEF_PROTOCOL_VER)
-    msg += u32(DEF_RECV_BUF)
-    msg += u32(DEF_SEND_BUF)
+    msg += u32(recv_buf)
+    msg += u32(send_buf)
     msg += u32(DEF_MAX_MSG_LEN)
     msg += u32(DEF_MAX_CHUNK)
     return msg
@@ -1110,7 +1125,7 @@ def handle_client(client_sock, addr, profile_name, num_endpoints, session_timeou
                     if fields['endpoint_url']:
                         print(f"    Endpoint URL:        {fields['endpoint_url']}")
 
-                ack = build_ack()
+                ack = build_ack(profile)
                 print(hex_dump(ack, label=f"SEND ACK to {remote}"))
                 client_sock.sendall(ack)
                 detect_log.message(remote, "ACK")
