@@ -51,7 +51,7 @@ def test_pcworx(mock_server):
     assert "firmware version" in fields, out
 
 
-# ── Privileged (port < 1024), verified by CODE-READING ───────────────────────
+# ── Privileged (port < 1024); runs as root in CI ─────────────────────────────
 
 @pytest.mark.privileged
 @pytest.mark.skipif(os.geteuid() != 0, reason="port <1024 needs root")
@@ -59,10 +59,13 @@ def test_modbus(mock_server):
     mock_server(MOCK, 502, "--modbus", inject_port=False)
     fields, out = nmap_scan(502, _script("modbus-discover-improved.nse"))
     # modbus-discover nests results under "sid 0x1"; parse_fields flattens the
-    # labels. The mock answers Read Device Identification (func 0x2B) with
-    # vendor "Schneider Elec", product "PM710", revision "v03.110".
-    assert "device identification" in fields, out
-    assert "Schneider Elec" in fields["device identification"], out
+    # labels. The mock answers Report Slave ID (func 0x11) with the hardcoded
+    # device string "\xFA\xFFPM710PowerMeter" (ot_mock_servers.py modbus handler),
+    # which the NSE surfaces as the "Slave ID data" field. (The mock also
+    # implements func 0x2B Read Device Identification, but the NSE's default
+    # output reports the Slave ID, so that is what we assert against.)
+    assert "slave id data" in fields, out
+    assert "PM710" in fields["slave id data"], out
 
 
 # ── xfail: script/mock cannot be faithfully driven by the TCP harness ────────
