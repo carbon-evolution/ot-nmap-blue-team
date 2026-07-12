@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nmap and lua
+        run: sudo apt-get update && sudo apt-get install -y nmap lua5.4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install -r sandbox/tests/requirements.txt
+
+      - name: Lua syntax check (all NSE)
+        run: |
+          set -e
+          LUAC="$(command -v luac || command -v luac5.4 || command -v luac5.3)"
+          if [ -z "$LUAC" ]; then echo "no luac binary found" >&2; exit 1; fi
+          echo "using $LUAC"
+          for f in improved-scripts/*.nse improved-scripts/lesser-known/*.nse; do
+            echo "$LUAC -p $f"
+            "$LUAC" -p "$f"
+          done
+
+      - name: Run unprivileged tests
+        working-directory: sandbox/tests
+        run: python3 -m pytest -m "not privileged" -v
+
+      - name: Run privileged tests (root, port < 1024)
+        working-directory: sandbox/tests
+        run: sudo -E env "PATH=$PATH" python3 -m pytest -m privileged -v
