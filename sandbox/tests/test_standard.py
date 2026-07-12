@@ -74,7 +74,7 @@ def test_modbus(mock_server):
 def test_profinet(mock_server):
     # PROFINET-CM is UDP 34964; the all-in-one mock serves it. Uses the UDP
     # harness path (nmap -sU), which requires root.
-    mock_server(MOCK, 34964, "--profinet", inject_port=False)
+    mock_server(MOCK, 34964, "--profinet", inject_port=False, udp=True)
     fields, out = nmap_scan(34964, _script("profinet-cm-lookup-improved.nse"), udp=True)
     # profinet-cm-lookup-improved builds output via stdnse.output_table() with
     # key "deviceName" (see parse_response); parse_fields lowercases it.

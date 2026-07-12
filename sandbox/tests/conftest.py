@@ -26,8 +26,38 @@ def _wait_port(port, host="127.0.0.1", timeout=10.0):
     return False
 
 
+def _wait_udp_port(port, host="127.0.0.1", timeout=10.0):
+    """Best-effort readiness for a UDP mock.
+
+    A connected UDP socket to a port with no listener triggers an ICMP
+    port-unreachable, surfaced as ECONNREFUSED on the probe. Once the mock is
+    bound the probe either draws a reply or simply times out (the mock ignores
+    the junk probe) — both mean "listening". Poll until that happens.
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.settimeout(0.3)
+            s.connect((host, port))
+            s.send(b"\x00")
+            try:
+                s.recv(64)      # a reply => definitely listening
+                return True
+            except socket.timeout:
+                return True     # no reply, but no refusal => bound and ignoring
+            except ConnectionRefusedError:
+                pass            # nothing bound yet; retry
+        except (ConnectionRefusedError, OSError):
+            pass
+        finally:
+            s.close()
+        time.sleep(0.15)
+    return False
+
+
 class _Mock:
-    def __init__(self, script, port, *args, inject_port=True):
+    def __init__(self, script, port, *args, inject_port=True, udp=False):
         self.script = script
         cmd = [sys.executable, os.path.join(SANDBOX, script)]
         if inject_port:
@@ -37,7 +67,8 @@ class _Mock:
             cmd,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        if not _wait_port(port):
+        ready = _wait_udp_port(port) if udp else _wait_port(port)
+        if not ready:
             self.stop()
             raise RuntimeError(f"{script} never opened port {port}")
 
@@ -57,8 +88,8 @@ def mock_server():
     """
     started = []
 
-    def _start(script, port, *args, inject_port=True):
-        m = _Mock(script, port, *args, inject_port=inject_port)
+    def _start(script, port, *args, inject_port=True, udp=False):
+        m = _Mock(script, port, *args, inject_port=inject_port, udp=udp)
         started.append(m)
         return m
 
