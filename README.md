@@ -313,6 +313,19 @@ The 6 standalone servers go far beyond simple canned responses:
 
 All 13 scripts have been tested against their corresponding mock servers. See `sandbox/test-results/README.md` for detailed output.
 
+### ✅ Automated Tests & CI
+
+A `pytest` harness in `sandbox/tests/` boots each mock server as a subprocess, runs the matching NSE script against it with real `nmap`, and asserts that the script extracts the expected named fields — and, for profile-capable devices, that different device profiles produce different output. GitHub Actions runs a `luac -p` syntax gate over all 13 scripts plus the full suite on every push and pull request.
+
+```bash
+cd sandbox/tests
+pip install -r requirements.txt
+python3 -m pytest -m "not privileged" -v      # scripts on ports > 1024, no root needed
+sudo python3 -m pytest -m privileged -v        # Red Lion (789), Modbus (502), MMS (102)
+```
+
+Tests marked `privileged` bind a port below 1024 and are skipped unless run as root (they run as root in CI). A few standard-protocol tests are declared `xfail` with an explicit reason — HART-IP and MMS because the published mock/script payloads are redacted, and PROFINET-CM because it is UDP-only while the harness scans over TCP; DNP3 has no emulation in the all-in-one mock. Every one of the 13 scripts has a test, so a parser regression or a field-label mismatch turns the CI run red.
+
 ---
 
 ## 🧭 Methodology & Safety
