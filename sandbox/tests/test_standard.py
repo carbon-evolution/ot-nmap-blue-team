@@ -69,18 +69,6 @@ def test_modbus(mock_server):
     assert "PM710" in fields["slave id data"], out
 
 
-# ── xfail: script/mock cannot be faithfully driven by the TCP harness ────────
-
-@pytest.mark.xfail(reason="published hartip NSE has a redacted ([REDACTED]) "
-                          "Command 0 payload; fromhex yields nil so the "
-                          "exchange cannot complete", strict=False)
-def test_hartip(mock_server):
-    mock_server(MOCK, 5094, "--hartip", inject_port=False)
-    fields, out = nmap_scan(5094, _script("hartip-info-improved.nse"))
-    # Real label if the script could complete Command 0.
-    assert "manufacturer id" in fields, out
-
-
 @pytest.mark.privileged
 @pytest.mark.skipif(os.geteuid() != 0, reason="UDP scan (-sU) needs root")
 def test_profinet(mock_server):
@@ -91,6 +79,18 @@ def test_profinet(mock_server):
     # profinet-cm-lookup-improved builds output via stdnse.output_table() with
     # key "deviceName" (see parse_response); parse_fields lowercases it.
     assert "devicename" in fields, out
+
+
+# ── xfail: script/mock cannot be faithfully driven by the TCP harness ────────
+
+@pytest.mark.xfail(reason="published hartip NSE has a redacted ([REDACTED]) "
+                          "Command 0 payload; fromhex yields nil so the "
+                          "exchange cannot complete", strict=False)
+def test_hartip(mock_server):
+    mock_server(MOCK, 5094, "--hartip", inject_port=False)
+    fields, out = nmap_scan(5094, _script("hartip-info-improved.nse"))
+    # Real label if the script could complete Command 0.
+    assert "manufacturer id" in fields, out
 
 
 @pytest.mark.privileged
