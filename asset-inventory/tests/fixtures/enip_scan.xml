@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///opt/homebrew/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.99 scan initiated Sun Jul 12 17:18:34 2026 as: nmap -Pn -sT -p 44818 -&#45;script improved-scripts/enip-identity-improved.nse -oX asset-inventory/tests/fixtures/enip_scan.xml 127.0.0.1 -->
+<nmaprun scanner="nmap" args="nmap -Pn -sT -p 44818 -&#45;script improved-scripts/enip-identity-improved.nse -oX asset-inventory/tests/fixtures/enip_scan.xml 127.0.0.1" start="1783847914" startstr="Sun Jul 12 17:18:34 2026" version="7.99" xmloutputversion="1.05">
+<scaninfo type="connect" protocol="tcp" numservices="1" services="44818"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1783847915" endtime="1783847915"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="127.0.0.1" addrtype="ipv4"/>
+<hostnames>
+<hostname name="localhost" type="PTR"/>
+</hostnames>
+<ports><port protocol="tcp" portid="44818"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="EtherNet/IP" method="probed" conf="10"/><script id="enip-identity-improved" output="&#xa;  Vendor: Rockwell Automation/Allen-Bradley (1)&#xa;  Product Name: 1756-L61/B LOGIX5561&#xa;  Serial Number: 0x00C0FFEE&#xa;  Device Type: Programmable Logic Controller (14)&#xa;  Product Code: 54&#xa;  Revision: 20.11&#xa;  Device State: Operational (3)"><elem key="Vendor">Rockwell Automation/Allen-Bradley (1)</elem>
+<elem key="Product Name">1756-L61/B LOGIX5561</elem>
+<elem key="Serial Number">0x00C0FFEE</elem>
+<elem key="Device Type">Programmable Logic Controller (14)</elem>
+<elem key="Product Code">54</elem>
+<elem key="Revision">20.11</elem>
+<elem key="Device State">Operational (3)</elem>
+</script></port>
+</ports>
+<times srtt="155" rttvar="5000" to="100000"/>
+</host>
+<runstats><finished time="1783847915" timestr="Sun Jul 12 17:18:35 2026" summary="Nmap done at Sun Jul 12 17:18:35 2026; 1 IP address (1 host up) scanned in 0.07 seconds" elapsed="0.07" exit="success"/><hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>
