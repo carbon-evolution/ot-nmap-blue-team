@@ -333,7 +333,7 @@ python3 -m pytest -m "not privileged" -v      # scripts on ports > 1024, no root
 sudo python3 -m pytest -m privileged -v        # Red Lion (789), Modbus (502), MMS (102)
 ```
 
-Tests marked `privileged` bind a port below 1024 or require a UDP scan (`nmap -sU`), and are skipped unless run as root (they run as root in CI) — this covers Red Lion, Modbus, IEC 61850 MMS, S7comm-plus (TCP < 1024) and BACnet/IP + PROFINET-CM (UDP). A few standard-protocol tests are declared `xfail` with an explicit reason — HART-IP and MMS because the published mock/script payloads are redacted; DNP3 has no emulation in the all-in-one mock. Every one of the 16 scripts has a test, so a parser regression or a field-label mismatch turns the CI run red.
+Tests marked `privileged` bind a port below 1024 or require a UDP scan (`nmap -sU`), and are skipped unless run as root (they run as root in CI) — this covers Red Lion, Modbus, IEC 61850 MMS, S7comm-plus (TCP < 1024) and BACnet/IP (UDP). A few standard-protocol tests are declared `xfail` with an explicit reason — HART-IP and MMS because the published mock/script payloads are redacted; DNP3 has no emulation in the all-in-one mock; and PROFINET-CM because its NSE parses the pcap layer-3 frame while the all-in-one mock encodes fields at payload-relative offsets (a byte-offset mismatch). Every one of the 16 scripts has a test, so a parser regression or a field-label mismatch turns the CI run red.
 
 ---
 
