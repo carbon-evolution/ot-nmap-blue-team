@@ -27,11 +27,14 @@ def _wait_port(port, host="127.0.0.1", timeout=10.0):
 
 
 class _Mock:
-    def __init__(self, script, port, *args):
+    def __init__(self, script, port, *args, inject_port=True):
         self.script = script
+        cmd = [sys.executable, os.path.join(SANDBOX, script)]
+        if inject_port:
+            cmd += ["--port", str(port)]
+        cmd += list(args)
         self.proc = subprocess.Popen(
-            [sys.executable, os.path.join(SANDBOX, script),
-             "--port", str(port), *args],
+            cmd,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         if not _wait_port(port):
@@ -54,8 +57,8 @@ def mock_server():
     """
     started = []
 
-    def _start(script, port, *args):
-        m = _Mock(script, port, *args)
+    def _start(script, port, *args, inject_port=True):
+        m = _Mock(script, port, *args, inject_port=inject_port)
         started.append(m)
         return m
 
