@@ -20,6 +20,7 @@ Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IE
 
 ## Table of Contents
 
+- [Getting Started](#-getting-started)
 - [Blue Team Purpose](#-blue-team-purpose)
 - [Script Catalog](#-script-catalog)
 - [What Information Can These Scripts Extract?](#-what-information-can-these-scripts-extract)
@@ -27,9 +28,66 @@ Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IE
 - [Installation](#-installation)
 - [Usage Examples](#-usage-examples)
 - [Testing with Mock Servers](#-testing-with-mock-servers)
+- [Automated Tests & CI](#-automated-tests--ci)
+- [Asset Inventory Pipeline](#-asset-inventory-pipeline)
 - [Methodology & Safety](#-methodology--safety)
 - [Project Structure](#-project-structure)
+- [Changelog](#-changelog)
 - [License](#-license)
+
+---
+
+## 🚦 Getting Started
+
+This repo has **three things you can do**. Pick the one that matches your goal.
+
+**Requirements:** `nmap` (7.9+), `python3` (3.8+). No Python packages to install — everything is standard library. `luac`/`lua5.4` is optional (only for the syntax gate).
+
+```bash
+git clone https://github.com/carbon-evolution/ot-nmap-blue-team.git
+cd ot-nmap-blue-team
+```
+
+### 1. Scan real OT devices (the NSE scripts)
+
+Point the improved scripts at a device or subnet. Everything is **T1-safe / read-only** — identity queries only. See [Installation](#-installation) to copy the scripts into nmap's search path, or run them by full path:
+
+```bash
+# One protocol, one host
+nmap -p 44818 --script improved-scripts/enip-identity-improved.nse 192.168.1.50
+
+# All 16 protocols across a subnet (see Usage Examples for the full command)
+nmap -sU -sT -p T:44818,502,102,1911,1962,5094,20000,5007,4840,18245,20547,1089,789,U:47808,34964 \
+  --script improved-scripts/,improved-scripts/lesser-known/ 192.168.1.0/24
+```
+> UDP protocols (BACnet 47808, PROFINET 34964) and privileged ports (< 1024, e.g. Modbus 502, MMS/S7comm 102, Red Lion 789) require running nmap as **root/sudo**.
+
+### 2. Try it safely against the honeypot mocks (no real hardware)
+
+Every script has a Python **honeypot mock** so you can see it work with zero risk:
+
+```bash
+# Terminal A — start a mock device
+python3 sandbox/enip_mock_server.py --port 44818 --profile controllogix
+
+# Terminal B — scan it
+nmap -p 44818 --script improved-scripts/enip-identity-improved.nse 127.0.0.1
+```
+See [Testing with Mock Servers](#-testing-with-mock-servers). To run the full automated test suite, see [Automated Tests & CI](#-automated-tests--ci).
+
+### 3. Build an asset inventory (the pipeline)
+
+Turn scan results into a normalized, CVE-annotated **asset inventory** (JSON/CSV):
+
+```bash
+# Parse a saved nmap XML (capture one with:  nmap ... -oX scan.xml)
+python3 -m assetinv parse scan.xml --cve
+
+# Or scan and inventory in one step
+python3 -m assetinv scan 192.168.1.50 --ports 44818 \
+  --script improved-scripts/enip-identity-improved.nse --cve --format csv -o inventory.csv
+```
+See [Asset Inventory Pipeline](#-asset-inventory-pipeline). Run `python3 -m assetinv` from the `asset-inventory/` directory (or add it to `PYTHONPATH`).
 
 ---
 
@@ -188,14 +246,14 @@ nmap -p 502 --script /path/to/modbus-discover-improved.nse <target>
 
 ### Basic Host Scan
 ```bash
-# Scan a single host for all supported OT protocols
-nmap -p 502,1911,1962,5094,102,20000,5007,4840,18245,20547,1089,789 \
-  --script dnp3-advanced-info,modbus-discover-improved,fox-info-improved,\
-pcworx-info-improved,hartip-info-improved,iec61850-mms-improved,\
-gesrtp-info-improved,opcua-discovery-improved,melsecq-info-improved,\
-proconos-info-improved,ff-hse-discover-improved,redlion-cr3-info-improved \
+# Scan a single host for all 16 supported OT protocols (TCP + UDP).
+# Needs root/sudo for the UDP scan (-sU) and the privileged ports (<1024).
+sudo nmap -sT -sU \
+  -p T:502,1911,1962,5094,102,20000,44818,18245,20547,1089,789,4840,5007,U:47808,34964 \
+  --script improved-scripts/,improved-scripts/lesser-known/ \
   <target>
 ```
+> `--script improved-scripts/,improved-scripts/lesser-known/` loads every `.nse` in those folders; nmap runs only the ones whose port/service matches. If you copied the scripts into nmap's search path (see [Installation](#-installation)), you can use the script names instead of paths.
 
 ### Scan Specific Protocol
 ```bash
@@ -211,10 +269,16 @@ nmap -p 5007 --script melsecq-info-improved.nse 192.168.1.100
 
 ### Subnet Scan
 ```bash
-# Scan entire OT subnet for all supported protocols
-nmap -p 502,1911,1962,5094,102,20000,5007,4840,18245,20547,1089,789 \
+# Scan an entire OT subnet; -oA saves normal/grepable/XML (ot-scan.xml feeds
+# the asset-inventory pipeline below).
+sudo nmap -sT -sU \
+  -p T:502,1911,1962,5094,102,20000,44818,18245,20547,1089,789,4840,5007,U:47808,34964 \
+  --script improved-scripts/,improved-scripts/lesser-known/ \
   --open -oA ot-scan \
   192.168.1.0/24
+
+# Then build the inventory from the XML nmap just wrote:
+python3 -m assetinv parse ot-scan.xml --cve -o inventory.json
 ```
 
 ### Sample Output
@@ -250,7 +314,7 @@ PORT      STATE  SERVICE
 
 ## 🧪 Testing with Mock Servers
 
-> 🔥 **Honeypot-Grade Emulation**: 6 of the protocol servers are built as full-fledged **honeypots** — complete state machines, profile-based device identities, session tracking, memory/register read-write, alarm engines, and structured detection logging. They're indistinguishable from real OT devices during NSE scanning.
+> 🔥 **Honeypot-Grade Emulation**: 9 of the protocol servers are built as full-fledged **honeypots** — complete state machines, profile-based device identities, session tracking, memory/register read-write, alarm engines, and structured detection logging. They're indistinguishable from real OT devices during NSE scanning.
 
 This repository includes Python mock servers for every NSE script, enabling safe testing without connecting to real OT devices.
 
@@ -388,8 +452,9 @@ ot-nmap-blue-team/
 ├── LICENSE                       # MIT License
 ├── README.md                     # This file
 ├── .gitignore
+├── .github/workflows/ci.yml      # GitHub Actions: luac gate + pytest suites
 │
-├── improved-scripts/             # NSE scripts (standard protocols)
+├── improved-scripts/             # 16 NSE scripts (standard protocols)
 │   ├── dnp3-advanced-info.nse
 │   ├── modbus-discover-improved.nse
 │   ├── fox-info-improved.nse
@@ -397,6 +462,9 @@ ot-nmap-blue-team/
 │   ├── hartip-info-improved.nse
 │   ├── iec61850-mms-improved.nse
 │   ├── profinet-cm-lookup-improved.nse
+│   ├── enip-identity-improved.nse        # Phase 2: EtherNet/IP CIP
+│   ├── bacnet-discover-improved.nse      # Phase 2: BACnet/IP
+│   ├── s7comm-plus-info-improved.nse     # Phase 2: S7comm-plus
 │   │
 │   └── lesser-known/             # NSE scripts (lesser-known protocols)
 │       ├── gesrtp-info-improved.nse
@@ -406,21 +474,34 @@ ot-nmap-blue-team/
 │       ├── ff-hse-discover-improved.nse
 │       └── redlion-cr3-info-improved.nse
 │
-├── sandbox/                      # Mock servers and tests
-│   ├── ot_mock_servers.py
-│   ├── melsecq_mock_server.py
+├── sandbox/                      # Honeypot mock servers + pytest harness
+│   ├── ot_mock_servers.py        # all-in-one (standard protocols)
+│   ├── melsecq_mock_server.py    # 9 standalone honeypot mocks:
 │   ├── opcua_mock_server.py
 │   ├── proconos_mock_server.py
 │   ├── gesrtp_mock_server.py
 │   ├── ffhse_mock_server.py
 │   ├── redlion_mock_server.py
-│   ├── test_runner.sh
-│   └── test-results/
-│       └── README.md
+│   ├── enip_mock_server.py       # Phase 2
+│   ├── bacnet_mock_server.py     # Phase 2
+│   ├── s7commplus_mock_server.py # Phase 2
+│   └── tests/                    # Phase 1: pytest mock-driven suite
+│       ├── conftest.py           # mock_server + nmap_scan fixtures
+│       └── test_*.py             # one per script
+│
+├── asset-inventory/              # Phase 3: scan -> inventory pipeline
+│   ├── assetinv/                 # stdlib package (runner/parser/normalizer/
+│   │   └── data/ics_cve_hints.json #   cve/export/cli) + offline CVE bundle
+│   ├── tests/                    # unit + end-to-end integration tests
+│   └── README.md
+│
+├── docs/superpowers/             # Design specs + implementation plans (per phase)
+│   ├── specs/
+│   └── plans/
 │
 ├── scada-tools/                  # Third-party SCADA tools (reference)
 ├── ICS-Discovery-Tools/          # Community ICS discovery scripts
-└── Redpoint/                     # Redpoint OT security tools
+└── Redpoint/                     # Redpoint OT security tools (upstream bases)
 ```
 
 ## 📚 Documentation
@@ -433,6 +514,53 @@ ot-nmap-blue-team/
 - [DNP3-NSE-Deep-Dive.md](DNP3-NSE-Deep-Dive.md) — DNP3 protocol deep dive
 - [DNP3-Advanced-Script-Report.md](DNP3-Advanced-Script-Report.md) — DNP3 script report
 - [NSE-Script-Code-Review.md](NSE-Script-Code-Review.md) — Code review of third-party NSE scripts
+
+---
+
+## 📅 Changelog
+
+The project was built in three planned phases. Design specs and implementation
+plans for each live in [`docs/superpowers/`](docs/superpowers/).
+
+### Phase 3 — Asset-Inventory Pipeline · 2026-07-12
+- Added the [`asset-inventory/`](asset-inventory/) package (`assetinv`, standard
+  library only): a pipeline that turns NSE scan results into a normalized,
+  CVE-annotated asset inventory (JSON/CSV).
+- Modules: `runner` (nmap `-oX` or a saved XML) → `parser` → `normalizer`
+  (maps all 16 scripts' labels into one canonical `Asset` schema) → `cve`
+  (offline curated ICS-CVE bundle, non-authoritative hints) → `export` →
+  `cli` (`scan` / `parse` subcommands).
+- Seeded the CVE bundle with real CISA-advisory CVEs (Rockwell Logix, Siemens
+  S7-1200/1500). Added a full pytest suite incl. an unprivileged end-to-end
+  integration test, wired into CI.
+
+### Phase 2 — Three New Protocols · 2026-07-12
+- Added **EtherNet/IP CIP** (`enip-identity-improved`, TCP 44818),
+  **BACnet/IP** (`bacnet-discover-improved`, UDP 47808), and **S7comm-plus**
+  (`s7comm-plus-info-improved`, TCP 102) — each with a honeypot mock and tests.
+  Script count **13 → 16**; standalone honeypot mocks **6 → 9**.
+- Ported the new scripts off the removed nmap `bin` API to
+  `string.pack`/`string.unpack`.
+- Extended the test harness with a **UDP scan path** (`nmap -sU`) so BACnet is
+  testable. PROFINET-CM remains `xfail` (documented mock/NSE byte-offset gap).
+
+### Phase 1 — Test Harness & CI · 2026-07-11 → 2026-07-12
+- Built a `pytest` **mock-driven harness** (`sandbox/tests/`): boots each mock
+  and asserts the matching NSE extracts the right fields, including
+  profile-difference checks.
+- Added **GitHub Actions CI**: a `luac -p` syntax gate over every script plus
+  the full test suite on each push/PR.
+- Fixed real bugs the harness surfaced: 4 scripts crashed at runtime on
+  nmap 7.9x/Lua 5.4 (removed `bin`/`bit32` APIs) — ported them; FF HSE now
+  extracts named device fields from its labeled banner; OPC UA mock varies its
+  ACK per profile; Modbus test reconciled to the mock's real output.
+
+### Initial Release · 2026-07-11
+- 13 improved NSE discovery scripts for OT/ICS protocols (DNP3, Modbus, Fox,
+  PCWorx, HART-IP, IEC 61850 MMS, PROFINET, GE SRTP, OPC UA, MELSEC-Q, ProConOS,
+  Red Lion Crimson, FF HSE), 6 honeypot-grade mock servers, and reference docs.
+- Fixed an FF HSE `string.unpack` crash and corrected the README quick-test
+  launch commands.
 
 ---
 
