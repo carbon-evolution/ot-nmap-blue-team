@@ -83,15 +83,18 @@ def parse_fields(out):
     return fields
 
 
-def nmap_scan(port, script_path, script_args=None):
+def nmap_scan(port, script_path, script_args=None, udp=False):
     """Run nmap against 127.0.0.1:port with one NSE script.
 
-    Returns (fields_dict, raw_stdout).
+    udp=True issues a UDP scan (nmap -sU), which requires root. Returns
+    (fields_dict, raw_stdout).
     """
-    cmd = ["nmap", "-Pn", "-p", str(port), "--script", script_path, "127.0.0.1"]
+    proto_flag = "-sU" if udp else "-sT"
+    cmd = ["nmap", "-Pn", proto_flag, "-p", str(port),
+           "--script", script_path, "127.0.0.1"]
     if script_args:
         cmd += ["--script-args", script_args]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     out = proc.stdout
     if proc.returncode != 0:
         out += f"\n[nmap exited {proc.returncode}]\n{proc.stderr}"

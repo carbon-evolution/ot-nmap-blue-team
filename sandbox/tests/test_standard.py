@@ -13,7 +13,8 @@ Verification status of the asserted field labels (see task report):
                     ("[REDACTED]" inside stdnse.fromhex), so it cannot complete
                     the exchange -> xfail.
   * profinet     -> PNIO-CM is UDP-only (portrule "udp" + nmap.new_socket("udp"));
-                    the harness nmap_scan is TCP-only -> xfail.
+                    now driven via the harness UDP path (nmap -sU), so it is a
+                    real privileged test (root-only, runs in CI-root).
   * mms          -> the mock's canned BER responses contain "[REDACTED]", so
                     bytes.fromhex() raises and no MMS PDU is returned even under
                     root -> xfail (also binds privileged port 102).
@@ -80,11 +81,15 @@ def test_hartip(mock_server):
     assert "manufacturer id" in fields, out
 
 
-@pytest.mark.xfail(reason="profinet-cm is UDP-only (portrule 'udp'); harness "
-                          "nmap_scan is TCP-only", strict=False)
+@pytest.mark.privileged
+@pytest.mark.skipif(os.geteuid() != 0, reason="UDP scan (-sU) needs root")
 def test_profinet(mock_server):
+    # PROFINET-CM is UDP 34964; the all-in-one mock serves it. Uses the UDP
+    # harness path (nmap -sU), which requires root.
     mock_server(MOCK, 34964, "--profinet", inject_port=False)
-    fields, out = nmap_scan(34964, _script("profinet-cm-lookup-improved.nse"))
+    fields, out = nmap_scan(34964, _script("profinet-cm-lookup-improved.nse"), udp=True)
+    # profinet-cm-lookup-improved builds output via stdnse.output_table() with
+    # key "deviceName" (see parse_response); parse_fields lowercases it.
     assert "devicename" in fields, out
 
 
