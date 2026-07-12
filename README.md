@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Honeypot-Grade](https://img.shields.io/badge/Honeypot-Grade-purple)](sandbox/)
-[![NSE](https://img.shields.io/badge/NSE-13%20scripts-blue)](improved-scripts/)
+[![NSE](https://img.shields.io/badge/NSE-16%20scripts-blue)](improved-scripts/)
 
 <p align="center">
   <img src="banner.png" alt="OT Nmap Blue Team — Honeypot-Grade ICS Protocol Emulation" width="100%">
@@ -10,9 +10,9 @@
 
 A collection of **improved Nmap NSE (Scripting Engine) scripts** for discovering, fingerprinting, and auditing OT/ICS (Operational Technology / Industrial Control Systems) protocols. Designed for **blue-team security assessments**, asset inventory, and vulnerability management.
 
-> ⚡ **Honeypot-Grade Mock Servers**: All 6 lesser-known protocol servers (GE SRTP, OPC UA, Red Lion, FF HSE, MELSEC-Q, ProConOS) are built as **production-quality honeypots** — full protocol state machines, profile-based device identities, register/tag read-write, alarm engines, detection logging, and scan delay simulation. See [sandbox README](sandbox/) for details.
+> ⚡ **Honeypot-Grade Mock Servers**: All 9 standalone protocol servers (GE SRTP, OPC UA, Red Lion, FF HSE, MELSEC-Q, ProConOS, EtherNet/IP, BACnet/IP, S7comm-plus) are built as **production-quality honeypots** — full protocol state machines, profile-based device identities, register/tag read-write, alarm engines, detection logging, and scan delay simulation. See [sandbox README](sandbox/) for details.
 
-Covers **13 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IEC 61850 MMS, PROFINET, GE SRTP, OPC UA, MELSEC-Q, ProConOS, Red Lion Crimson, and Foundation Fieldbus HSE.
+Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IEC 61850 MMS, PROFINET, EtherNet/IP CIP, BACnet/IP, S7comm-plus, GE SRTP, OPC UA, MELSEC-Q, ProConOS, Red Lion Crimson, and Foundation Fieldbus HSE.
 
 > ⚠️ **DISCLAIMER**: These scripts are provided for **authorized security assessments only**. You MUST test these scripts in a **controlled lab environment first** before using them on any operational network. Running these scripts against production OT systems may cause unexpected behavior. The authors assume no liability for misuse or damage.
 
@@ -69,6 +69,9 @@ However, any network scan carries inherent risk. **Always test in a lab first.**
 | `hartip-info-improved.nse` | HART-IP | TCP 5094 | Device type, manufacturer ID, HART revision, device ID |
 | `iec61850-mms-improved.nse` | IEC 61850 MMS | TCP 102 | Logical device nodes, server identity, model name |
 | `profinet-cm-lookup-improved.nse` | PROFINET CM | UDP 34964 | Station name, vendor, device type, IP config |
+| `enip-identity-improved.nse` | EtherNet/IP CIP | TCP 44818 | Vendor, product name, serial number, device type, product code, revision, device state |
+| `bacnet-discover-improved.nse` | BACnet/IP | UDP 47808 | Vendor (name + id), model name, firmware, application software, object name, location, description |
+| `s7comm-plus-info-improved.nse` | S7comm-plus (S7-1200/1500) | TCP 102 | Module (order/MLFB), module type, firmware version, serial number, system name |
 
 ### Lesser-Known OT Protocols (`improved-scripts/lesser-known/`)
 
@@ -94,6 +97,9 @@ However, any network scan carries inherent risk. **Always test in a lab first.**
 | `hartip-info-improved` | Device Type, Manufacturer, HART Revision, Device ID |
 | `iec61850-mms-improved` | Logical Device Nodes, Server Identity, Model |
 | `profinet-cm-lookup-improved` | Station Name, Vendor, Device Type, IP Config |
+| `enip-identity-improved` | **Vendor**, **Product Name**, **Serial Number**, **Device Type**, **Product Code**, **Revision**, **Device State** |
+| `bacnet-discover-improved` | **Vendor**, **Model Name**, **Firmware**, **Application Software**, **Object Name**, **Location**, **Description** |
+| `s7comm-plus-info-improved` | **Module**, **Module Type**, **Version**, **Serial Number**, **System Name** |
 | `gesrtp-info-improved` | **PLC Model**, **Firmware Version**, **CPU Type**, **PLC Status** |
 | `opcua-discovery-improved` | **Application Name**, **Application URI**, **Product URI**, **Endpoints** |
 | `melsecq-info-improved` | **PLC Type**, **Series**, **Firmware** |
@@ -258,7 +264,7 @@ nmap             # For running the NSE scripts
 ```bash
 cd sandbox/
 
-# Start all 6 honeypot-grade servers
+# Start the 6 lesser-known honeypot servers
 # NOTE: Red Lion listens on TCP 789 (a privileged port), so its server
 # must be started with sudo. The NSE portrule is pinned to 789.
 python3 melsecq_mock_server.py --port 5007 &
@@ -282,7 +288,7 @@ kill %1 %2 %3 %4 %5 %6
 
 ### Mock Server Reference
 
-All 6 lesser-known protocol servers are built to **honeypot-grade** — they go beyond static responses with realistic state machines, profile-based device identities, detection logging, and scan delay simulation.
+All 9 standalone protocol servers are built to **honeypot-grade** — they go beyond static responses with realistic state machines, profile-based device identities, detection logging, and scan delay simulation.
 
 | Mock Server | Protocol | Port | Honeypot Features | Notes |
 |-------------|----------|------|-------------------|-------|
@@ -293,10 +299,13 @@ All 6 lesser-known protocol servers are built to **honeypot-grade** — they go 
 | `gesrtp_mock_server.py` | GE SRTP | 18245 | Full INIT→REQ state machine, SSTAT/LSTAT/CONFIG_INFO/MEM_READ/MEM_WRITE services, 3 profiles, connection tracking, detection logging, UDP support | Standalone |
 | `ffhse_mock_server.py` | FF HSE | 1089 | SM_IDENTIFY/MA_IDENTIFY/LREQ/LRES/LFIN/FMS_READ handlers, alarm engine, PV drift simulation, 4 profiles, detection logging | Standalone |
 | `redlion_mock_server.py` | Red Lion | 789 | Per-profile device identity + tag database, STX command set (read/write tags, login, config), write tag logging (0x12), scan delay, 4 profiles | Requires root (<1024) |
+| `enip_mock_server.py` | EtherNet/IP CIP | 44818 | ListIdentity (0x0063) CPF Identity response, 3 profiles (ControlLogix/Micro850/OMRON NX), detection logging, scan delay, SIGTERM shutdown | Standalone |
+| `bacnet_mock_server.py` | BACnet/IP | 47808/udp | ReadProperty answers for 8 Device-object identity properties (char-string + unsigned tags), 3 BAS profiles, TCP readiness listener, detection logging | Standalone (UDP) |
+| `s7commplus_mock_server.py` | S7comm-plus | 102 | COTP CR/CC + S7comm setup + SZL 0x11/0x1C identity responses at fixed offsets, 2 profiles (S7-1200/1500), detection logging | Requires root (<1024) |
 
 ### What Makes Them Honeypot-Grade
 
-The 6 standalone servers go far beyond simple canned responses:
+The 9 standalone servers go far beyond simple canned responses:
 
 | Capability | What It Means |
 |------------|---------------|
@@ -311,11 +320,11 @@ The 6 standalone servers go far beyond simple canned responses:
 
 ### Test Results
 
-All 13 scripts have been tested against their corresponding mock servers. See `sandbox/test-results/README.md` for detailed output.
+All 16 scripts have been tested against their corresponding mock servers. See `sandbox/test-results/README.md` for detailed output.
 
 ### ✅ Automated Tests & CI
 
-A `pytest` harness in `sandbox/tests/` boots each mock server as a subprocess, runs the matching NSE script against it with real `nmap`, and asserts that the script extracts the expected named fields — and, for profile-capable devices, that different device profiles produce different output. GitHub Actions runs a `luac -p` syntax gate over all 13 scripts plus the full suite on every push and pull request.
+A `pytest` harness in `sandbox/tests/` boots each mock server as a subprocess, runs the matching NSE script against it with real `nmap`, and asserts that the script extracts the expected named fields — and, for profile-capable devices, that different device profiles produce different output. GitHub Actions runs a `luac -p` syntax gate over all 16 scripts plus the full suite on every push and pull request.
 
 ```bash
 cd sandbox/tests
@@ -324,7 +333,7 @@ python3 -m pytest -m "not privileged" -v      # scripts on ports > 1024, no root
 sudo python3 -m pytest -m privileged -v        # Red Lion (789), Modbus (502), MMS (102)
 ```
 
-Tests marked `privileged` bind a port below 1024 and are skipped unless run as root (they run as root in CI). A few standard-protocol tests are declared `xfail` with an explicit reason — HART-IP and MMS because the published mock/script payloads are redacted, and PROFINET-CM because it is UDP-only while the harness scans over TCP; DNP3 has no emulation in the all-in-one mock. Every one of the 13 scripts has a test, so a parser regression or a field-label mismatch turns the CI run red.
+Tests marked `privileged` bind a port below 1024 or require a UDP scan (`nmap -sU`), and are skipped unless run as root (they run as root in CI) — this covers Red Lion, Modbus, IEC 61850 MMS, S7comm-plus (TCP < 1024) and BACnet/IP + PROFINET-CM (UDP). A few standard-protocol tests are declared `xfail` with an explicit reason — HART-IP and MMS because the published mock/script payloads are redacted; DNP3 has no emulation in the all-in-one mock. Every one of the 16 scripts has a test, so a parser regression or a field-label mismatch turns the CI run red.
 
 ---
 
