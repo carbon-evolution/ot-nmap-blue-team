@@ -58,3 +58,19 @@ def modbus_exception():
     proc = _spawn("modbus_mock_server.py", 15022, "--exception", "4")
     yield 15022
     _stop(proc)
+
+
+@pytest.fixture
+def enip_healthy():
+    proc = _spawn("enip_mock_server.py", 44818, "--profile", "controllogix",
+                  "--state", "4", "--status", "0x0000")
+    yield 44818
+    _stop(proc)
+
+
+@pytest.fixture
+def enip_faulted():
+    proc = _spawn("enip_mock_server.py", 44819, "--profile", "controllogix",
+                  "--state", "2", "--status", "0x0090")  # major unrecoverable
+    yield 44819
+    _stop(proc)
