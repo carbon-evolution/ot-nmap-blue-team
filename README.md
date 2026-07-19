@@ -1,8 +1,11 @@
 # OT Nmap Blue Team — Improved NSE Scripts for OT/ICS Protocol Discovery
 
+[![CI](https://github.com/carbon-evolution/ot-nmap-blue-team/actions/workflows/ci.yml/badge.svg)](../../actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Honeypot-Grade](https://img.shields.io/badge/Honeypot-Grade-purple)](sandbox/)
 [![NSE](https://img.shields.io/badge/NSE-16%20scripts-blue)](improved-scripts/)
+[![Protocols](https://img.shields.io/badge/protocols-16%20families-orange)](OT-Port-Protocol-Matrix.md)
+[![Live PLC Health](https://img.shields.io/badge/plchealth-Modbus%20%7C%20S7%20%7C%20EtherNet%2FIP-brightgreen)](plc-health/)
 
 <p align="center">
   <img src="banner.png" alt="OT Nmap Blue Team — Honeypot-Grade ICS Protocol Emulation" width="100%">
@@ -13,6 +16,32 @@ A collection of **improved Nmap NSE (Scripting Engine) scripts** for discovering
 > ⚡ **Honeypot-Grade Mock Servers**: All 9 standalone protocol servers (GE SRTP, OPC UA, Red Lion, FF HSE, MELSEC-Q, ProConOS, EtherNet/IP, BACnet/IP, S7comm-plus) are built as **production-quality honeypots** — full protocol state machines, profile-based device identities, register/tag read-write, alarm engines, detection logging, and scan delay simulation. See [sandbox README](sandbox/) for details.
 
 Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IEC 61850 MMS, PROFINET, EtherNet/IP CIP, BACnet/IP, S7comm-plus, GE SRTP, OPC UA, MELSEC-Q, ProConOS, Red Lion Crimson, and Foundation Fieldbus HSE.
+
+### The blue-team workflow
+
+Three tools that chain into one OT assessment loop — **discover** what's on the wire, **inventory** it with CVE context, then **watch** each PLC's live fault state:
+
+```mermaid
+flowchart LR
+    subgraph D["1 · Discover"]
+        N["Improved NSE scripts<br/>16 protocols"]
+        M["Honeypot mocks<br/>9 servers (safe lab)"]
+    end
+    subgraph I["2 · Inventory"]
+        A["assetinv<br/>nmap XML → normalized<br/>+ offline CVE hints"]
+    end
+    subgraph H["3 · Live health"]
+        P["plchealth<br/>poll Modbus / S7 / EtherNet-IP<br/>RUN·STOP·FAULT + diag buffer"]
+    end
+    N -->|"-oX scan.xml"| A
+    A -->|"targets"| P
+    M -.->|"test against"| N
+    M -.->|"test against"| P
+    P -->|"exit 0/1/2 · JSON/CSV"| R["Alerts / monitoring"]
+
+    classDef box fill:#0d1117,stroke:#e0b83a,color:#f0f6fc;
+    class N,M,A,P,R box;
+```
 
 > ⚠️ **DISCLAIMER**: These scripts are provided for **authorized security assessments only**. You MUST test these scripts in a **controlled lab environment first** before using them on any operational network. Running these scripts against production OT systems may cause unexpected behavior. The authors assume no liability for misuse or damage.
 
@@ -30,6 +59,7 @@ Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IE
 - [Testing with Mock Servers](#-testing-with-mock-servers)
 - [Automated Tests & CI](#-automated-tests--ci)
 - [Asset Inventory Pipeline](#-asset-inventory-pipeline)
+- [Live PLC Health Monitoring](#-live-plc-health-monitoring)
 - [Methodology & Safety](#-methodology--safety)
 - [Project Structure](#-project-structure)
 - [Changelog](#-changelog)
@@ -418,6 +448,28 @@ CVE hints are **non-authoritative** ("verify against vendor/CISA advisories") an
 
 ---
 
+## 🩺 Live PLC Health Monitoring
+
+Where the NSE scripts and `assetinv` read devices *at discovery time*, the [`plc-health/`](plc-health/) package (`plchealth`) reads a PLC's **live fault/diagnostic state** over its native protocol — the runtime health the scan-time tools can't see. Standard library only, read-only (never writes to or controls the PLC).
+
+```bash
+cd plc-health
+python3 -m plchealth poll 10.0.0.5                      # auto-detect protocol
+python3 -m plchealth poll 10.0.0.5 --proto s7           # Siemens S7-1200/1500
+python3 -m plchealth poll 10.0.0.5 --proto modbus --modbus-fault-bit 0
+python3 -m plchealth poll 10.0.0.5 --json health.json   # machine-readable
+```
+
+| Protocol | Port | Health signal decoded |
+|----------|------|-----------------------|
+| **Modbus TCP** | 502 | Modbus exception codes + a configurable status/fault register |
+| **S7comm** | 102 | CPU state (RUN/STOP/DEFECT/HOLD) via SZL 0x0424 + diagnostic buffer SZL 0x00A0 |
+| **EtherNet/IP** | 44818 | CIP Identity status word + state byte (owned/faulted, minor/major faults) |
+
+Exit codes make it scriptable for continuous monitoring: **`0`** healthy, **`1`** fault/degraded, **`2`** unreachable. Tested two ways — 29 tests against the bundled `sandbox` honeypot mocks (in CI), plus optional gated cross-checks against real simulators (pymodbus / python-snap7 / cpppo). See the [plc-health README](plc-health/README.md). This is Phase 4 of the project.
+
+---
+
 ## 🧭 Methodology & Safety
 
 ### Threat Level Classification
@@ -482,9 +534,10 @@ ot-nmap-blue-team/
 │   ├── gesrtp_mock_server.py
 │   ├── ffhse_mock_server.py
 │   ├── redlion_mock_server.py
-│   ├── enip_mock_server.py       # Phase 2
+│   ├── enip_mock_server.py       # Phase 2 (+ Phase 4 fault fields)
 │   ├── bacnet_mock_server.py     # Phase 2
-│   ├── s7commplus_mock_server.py # Phase 2
+│   ├── s7commplus_mock_server.py # Phase 2 (+ Phase 4 SZL diagnostics)
+│   ├── modbus_mock_server.py     # Phase 4: Modbus TCP fault/exception mock
 │   └── tests/                    # Phase 1: pytest mock-driven suite
 │       ├── conftest.py           # mock_server + nmap_scan fixtures
 │       └── test_*.py             # one per script
@@ -493,6 +546,12 @@ ot-nmap-blue-team/
 │   ├── assetinv/                 # stdlib package (runner/parser/normalizer/
 │   │   └── data/ics_cve_hints.json #   cve/export/cli) + offline CVE bundle
 │   ├── tests/                    # unit + end-to-end integration tests
+│   └── README.md
+│
+├── plc-health/                   # Phase 4: live PLC fault reader
+│   ├── plchealth/                # stdlib package (probes/{modbus,s7,enip} →
+│   │                             #   model/faultcodes/poller/cli)
+│   ├── tests/                    # mock-driven tests + gated sim/ cross-checks
 │   └── README.md
 │
 ├── docs/superpowers/             # Design specs + implementation plans (per phase)
@@ -519,8 +578,20 @@ ot-nmap-blue-team/
 
 ## 📅 Changelog
 
-The project was built in three planned phases. Design specs and implementation
+The project was built in planned phases. Design specs and implementation
 plans for each live in [`docs/superpowers/`](docs/superpowers/).
+
+### Phase 4 — Live PLC Health Reader · 2026-07-19
+- Added the [`plc-health/`](plc-health/) package (`plchealth`, standard library
+  only): polls a running PLC's live fault/diagnostic state over **Modbus TCP**,
+  **S7comm**, and **EtherNet/IP**, decodes CPU/fault state, and reports it with
+  scriptable exit codes (`0` healthy / `1` fault / `2` unreachable). Read-only.
+- Per-protocol probes → common `PLCHealth` model; `poller` with protocol
+  auto-detect; `cli` with JSON/CSV output; fault decode tables.
+- Extended the S7comm-plus mock with SZL 0x0424 (CPU state) and 0x00A0
+  (diagnostic buffer), the EtherNet/IP mock with settable status/state, and
+  added a new Modbus TCP mock. Tested against bundled mocks in CI, plus gated
+  cross-checks against real simulators (pymodbus/snap7/cpppo).
 
 ### Phase 3 — Asset-Inventory Pipeline · 2026-07-12
 - Added the [`asset-inventory/`](asset-inventory/) package (`assetinv`, standard
