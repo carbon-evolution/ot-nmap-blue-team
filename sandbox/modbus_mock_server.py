@@ -64,6 +64,9 @@ def main():
         print("self-test OK")
         return
 
+    # allow_reuse_address so the test harness can rebind a port still in
+    # TIME_WAIT from a prior run without the bind crashing the mock.
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     server = socketserver.ThreadingTCPServer(("127.0.0.1", args.port), Handler)
     server.cfg = args
     server.serve_forever()
