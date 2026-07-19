@@ -74,3 +74,19 @@ def enip_faulted():
                   "--state", "2", "--status", "0x0090")  # major unrecoverable
     yield 44819
     _stop(proc)
+
+
+@pytest.fixture
+def s7_run():
+    proc = _spawn("s7commplus_mock_server.py", 10102, "--profile", "s7_1200",
+                  "--cpu-state", "0x08")
+    yield 10102
+    _stop(proc)
+
+
+@pytest.fixture
+def s7_stop():
+    proc = _spawn("s7commplus_mock_server.py", 10103, "--profile", "s7_1200",
+                  "--cpu-state", "0x04", "--diag-event", "0x4300")
+    yield 10103
+    _stop(proc)

@@ -130,6 +130,39 @@ def build_szl_1c(prof: dict) -> bytes:
     return bytes(buf)
 
 
+def build_szl_0424(prof: dict) -> bytes:
+    """SZL-ID 0x0424 response: CPU operating-state byte at the last data byte.
+
+    The probe reads the CPU state from the final byte of the frame and maps it
+    via faultcodes.s7_cpu_state_name (0x08=RUN, 0x04=STOP, ...).
+    """
+    buf = bytearray(60)
+    _tpkt_cotp_header(buf)
+    _place(buf, 8, bytes([0x32, 0x07]))            # S7 proto id, ROSCTR Userdata
+    buf[29] = 0x04                                 # byte 30: SZL-ID high (echo)
+    buf[30] = 0x24                                 # byte 31: SZL-ID low
+    buf[-1] = prof.get("cpu_state", 0x08) & 0xFF   # CPU state at last byte
+    return bytes(buf)
+
+
+def build_szl_00a0(prof: dict) -> bytes:
+    """SZL-ID 0x00A0 response: diagnostic buffer.
+
+    Zero events by default; when a diag event id is configured it is written as
+    a big-endian u16 at the start of the trailing 12-byte window the probe reads
+    (frame bytes 49-50, 1-based). Zero => the probe records no fault.
+    """
+    buf = bytearray(60)
+    _tpkt_cotp_header(buf)
+    _place(buf, 8, bytes([0x32, 0x07]))            # S7 proto id, ROSCTR Userdata
+    buf[29] = 0x00                                 # byte 30: SZL-ID high (echo)
+    buf[30] = 0xA0                                 # byte 31: SZL-ID low
+    event = prof.get("diag_event")
+    if event:
+        _place(buf, len(buf) - 12 + 1, bytes([(event >> 8) & 0xFF, event & 0xFF]))
+    return bytes(buf)
+
+
 def response_for(prof: dict, req: bytes):
     """Return the reply bytes for a received request, or None to ignore."""
     if len(req) < 8:
@@ -142,10 +175,16 @@ def response_for(prof: dict, req: bytes):
     if rosctr == 0x01:                             # setup-communication
         return build_setup_ack()
     if rosctr == 0x07:                             # userdata (SZL read)
-        szl_id = req[30] if len(req) > 30 else 0   # byte 31
-        if szl_id == 0x1C:
+        # 2-byte SZL-ID (big-endian) at bytes 30-31 (1-based). The real script
+        # sends 00 11 / 00 1C, so single-byte 0x11/0x1C dispatch is preserved.
+        szl_id = ((req[29] << 8) | req[30]) if len(req) > 30 else 0
+        if szl_id == 0x001C:
             return build_szl_1c(prof)
-        return build_szl_11(prof)                  # default / 0x11
+        if szl_id == 0x0424:
+            return build_szl_0424(prof)
+        if szl_id == 0x00A0:
+            return build_szl_00a0(prof)
+        return build_szl_11(prof)                  # default / 0x0011
     return None
 
 
@@ -184,8 +223,11 @@ def handle_client(conn, addr, prof, verbose):
 
 
 def run_server(port: int = S7_DEFAULT_PORT, profile: str = DEFAULT_PROFILE,
-               verbose: bool = False):
-    prof = PROFILES.get(profile, PROFILES[DEFAULT_PROFILE])
+               verbose: bool = False, cpu_state: int = 0x08,
+               diag_event=None):
+    prof = dict(PROFILES.get(profile, PROFILES[DEFAULT_PROFILE]))
+    prof["cpu_state"] = cpu_state
+    prof["diag_event"] = diag_event
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -276,6 +318,10 @@ def main():
                         help="Enable per-response logging")
     parser.add_argument("--self-test", action="store_true",
                         help="Run built-in packet self-test and exit")
+    parser.add_argument("--cpu-state", type=lambda x: int(x, 0), default=0x08,
+                        help="CPU state byte for SZL 0x0424 (0x08=RUN,0x04=STOP)")
+    parser.add_argument("--diag-event", type=lambda x: int(x, 0), default=None,
+                        help="one diag-buffer event id for SZL 0x00A0 (e.g. 0x4300)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -283,7 +329,8 @@ def main():
         return
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
-    run_server(port=args.port, profile=args.profile, verbose=args.verbose)
+    run_server(port=args.port, profile=args.profile, verbose=args.verbose,
+               cpu_state=args.cpu_state, diag_event=args.diag_event)
 
 
 if __name__ == "__main__":
