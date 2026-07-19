@@ -42,3 +42,7 @@ jobs:
       - name: Run asset-inventory pipeline tests
         working-directory: asset-inventory
         run: python3 -m pytest -v
+
+      - name: Run plc-health tests
+        working-directory: plc-health
+        run: python3 -m pytest -q --ignore=tests/sim

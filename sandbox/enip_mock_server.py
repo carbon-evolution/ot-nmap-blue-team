@@ -142,7 +142,7 @@ def build_identity_body(prof: dict) -> bytes:
     body += struct.pack("<H", prof["device_type"] & 0xFFFF)
     body += struct.pack("<H", prof["product_code"] & 0xFFFF)
     body += struct.pack("BB", rev_major & 0xFF, rev_minor & 0xFF)
-    body += struct.pack("<H", 0x0000)  # device status word
+    body += struct.pack("<H", prof.get("status", 0x0000) & 0xFFFF)  # device status word
     body += struct.pack("<I", prof["serial"] & 0xFFFFFFFF)
     body += struct.pack("B", len(name) & 0xFF)
     body += name
@@ -214,12 +214,12 @@ def recv_exact(sock: socket.socket, n: int) -> bytes:
 # ======================================================================
 # Client Handler
 # ======================================================================
-def handle_client(conn, addr, profile: str, scan_delay_ms: int,
+def handle_client(conn, addr, prof: dict, scan_delay_ms: int,
                   verbose: bool = False):
     """Handle a single EtherNet/IP client connection."""
     addr_str = f"{addr[0]}:{addr[1]}"
-    prof = PROFILES.get(profile, PROFILES[DEFAULT_PROFILE])
-    _detection_log.info("%s -> CONNECT (profile=%s)", addr_str, profile)
+    _detection_log.info("%s -> CONNECT (profile=%s)", addr_str,
+                        prof.get("product_name", "?"))
 
     try:
         while True:
@@ -271,9 +271,15 @@ _shutdown = threading.Event()
 
 def run_server(port: int = ENIP_DEFAULT_PORT, profile: str = DEFAULT_PROFILE,
                scan_delay_ms: int = DEFAULT_SCAN_DELAY_MS,
-               verbose: bool = False):
+               verbose: bool = False,
+               status_override=None, state_override=None):
     """Run the EtherNet/IP mock server until SIGTERM/Ctrl+C."""
     prof = PROFILES.get(profile, PROFILES[DEFAULT_PROFILE])
+    prof = dict(prof)
+    if status_override is not None:
+        prof["status"] = status_override
+    if state_override is not None:
+        prof["state"] = state_override
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -307,7 +313,7 @@ def run_server(port: int = ENIP_DEFAULT_PORT, profile: str = DEFAULT_PROFILE,
             client_id += 1
             threading.Thread(
                 target=handle_client,
-                args=(conn, addr, profile, scan_delay_ms, verbose),
+                args=(conn, addr, prof, scan_delay_ms, verbose),
                 daemon=True,
                 name=f"enip-client-{client_id}",
             ).start()
@@ -381,6 +387,10 @@ def main():
                         help="Enable per-response logging")
     parser.add_argument("--self-test", action="store_true",
                         help="Run built-in packet self-test and exit")
+    parser.add_argument("--status", type=lambda x: int(x, 0), default=None,
+                        help="override Identity status word (e.g. 0x0090)")
+    parser.add_argument("--state", type=int, default=None,
+                        help="override Identity state byte (e.g. 2 = faulted)")
     args = parser.parse_args()
 
     if args.self_test:
@@ -390,7 +400,8 @@ def main():
     signal.signal(signal.SIGTERM, _handle_sigterm)
     scan_delay = max(0, min(100, args.scan_delay))
     run_server(port=args.port, profile=args.profile,
-               scan_delay_ms=scan_delay, verbose=args.verbose)
+               scan_delay_ms=scan_delay, verbose=args.verbose,
+               status_override=args.status, state_override=args.state)
 
 
 if __name__ == "__main__":

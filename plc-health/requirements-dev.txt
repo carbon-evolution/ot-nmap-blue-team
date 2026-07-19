@@ -1,0 +1,4 @@
+pytest
+pymodbus>=3.0
+python-snap7>=1.3
+cpppo>=4.0
