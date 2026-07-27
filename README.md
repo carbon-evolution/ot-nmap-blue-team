@@ -21,27 +21,9 @@ Covers **16 protocol families** including DNP3, Modbus, Fox, PCWorx, HART-IP, IE
 
 Three tools that chain into one OT assessment loop — **discover** what's on the wire, **inventory** it with CVE context, then **watch** each PLC's live fault state:
 
-```mermaid
-flowchart LR
-    subgraph D["1 · Discover"]
-        N["Improved NSE scripts<br/>16 protocols"]
-        M["Honeypot mocks<br/>9 servers (safe lab)"]
-    end
-    subgraph I["2 · Inventory"]
-        A["assetinv<br/>nmap XML → normalized<br/>+ offline CVE hints"]
-    end
-    subgraph H["3 · Live health"]
-        P["plchealth<br/>poll Modbus / S7 / EtherNet-IP<br/>RUN·STOP·FAULT + diag buffer"]
-    end
-    N -->|"-oX scan.xml"| A
-    A -->|"targets"| P
-    M -.->|"test against"| N
-    M -.->|"test against"| P
-    P -->|"exit 0/1/2 · JSON/CSV"| R["Alerts / monitoring"]
-
-    classDef box fill:#0d1117,stroke:#e0b83a,color:#f0f6fc;
-    class N,M,A,P,R box;
-```
+<p align="center">
+  <img src="docs/img/architecture.png" alt="OT Nmap Blue Team architecture: 1·Discover (Improved NSE scripts, 16 protocols; Honeypot mocks, 9 servers) --nmap -oX scan.xml--> 2·Inventory (assetinv: nmap XML → normalized + offline CVE hints) --targets--> 3·Live health (plchealth: poll Modbus/S7/EtherNet-IP, RUN·STOP·FAULT + diag buffer) --exit 0/1/2, JSON/CSV--> Alerts / monitoring; honeypot mocks test against the NSE scripts and plchealth" width="900">
+</p>
 
 > ⚠️ **DISCLAIMER**: These scripts are provided for **authorized security assessments only**. You MUST test these scripts in a **controlled lab environment first** before using them on any operational network. Running these scripts against production OT systems may cause unexpected behavior. The authors assume no liability for misuse or damage.
 
