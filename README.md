@@ -107,6 +107,10 @@ See [Testing with Mock Servers](#-testing-with-mock-servers). To run the full au
 
 ### 3. Build an asset inventory (the pipeline)
 
+<p align="center">
+  <img src="docs/img/asset-inventory-pipeline.png" alt="Asset inventory pipeline: OT/ICS network → 1 Scan (nmap + OT/ICS NSE scripts) → 2 Parse (nmap -oX XML) → 3 Normalize (to Asset records) → 4 CVE match (offline ICS bundle) → 5 Export (JSON/CSV)" width="860">
+</p>
+
 Turn scan results into a normalized, CVE-annotated **asset inventory** (JSON/CSV):
 
 ```bash
